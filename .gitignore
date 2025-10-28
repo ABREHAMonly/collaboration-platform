@@ -1,0 +1,72 @@
+# dependencies (bun install)
+node_modules
+
+# output
+out
+dist
+*.tgz
+
+# code coverage
+coverage
+*.lcov
+
+# temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# TypeScript declaration files
+*.d.ts
+
+# TypeScript build info
+*.tsbuildinfo
+
+# IDEs and editors
+.vscode
+*.code-workspace
+
+# system files
+Thumbs.db
+Desktop.ini
+
+# Backup files
+*.bak
+*.backup
+
+# Operating system files
+ehthumbs.db
+Icon?
+
+# Windows image file caches
+*.stackdump
+
+# JetBrains IDEs
+.idea/
+*.iml
+
+# files 
+STEPS.txt
+
+# logs
+logs
+_.log
+report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
+
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# IntelliJ based IDEs
+.idea
+
+# Finder (MacOS) folder config
+.DS_Store
