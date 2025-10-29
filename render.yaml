@@ -3,8 +3,10 @@ services:
   - type: web
     name: collaboration-platform
     env: docker
+    plan: free
     docker:
       dockerfile: Dockerfile
+      dockerContext: .
     envVars:
       - key: NODE_ENV
         value: production
@@ -18,8 +20,13 @@ services:
         generateValue: true
       - key: ENABLE_AI
         value: false
+      - key: LOG_LEVEL
+        value: warn
+    healthCheckPath: /api/health
+    numInstances: 1
 
 databases:
   - name: collaboration_platform
+    plan: free
     databaseName: collaboration_platform
-    user: admin
+    user: collaboration_platform_user

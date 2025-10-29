@@ -2,7 +2,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { env } from '../config/env.js';
 import { db } from '../database/client.js';
-import { logSystem, logActivity } from '../services/logger.js';
+import { logger } from './logger.js';
 import { TaskService } from './taskService.js';
 import { ProjectService } from './projectService.js';
 import { ForbiddenError } from 'apollo-server-express';
@@ -132,13 +132,7 @@ export class AIService {
         }
       }
 
-      await logSystem('info', 'AI_TASKS_GENERATED', 
-        { projectId, prompt, tasksGenerated: createdTasks.length }, 
-        userId, 
-        ipAddress
-      );
-
-      await logActivity('AI_TASKS_GENERATED', 
+      await logger.info('AI_TASKS_GENERATED', 
         { projectId, prompt, tasksGenerated: createdTasks.length }, 
         userId, 
         ipAddress
@@ -149,7 +143,7 @@ export class AIService {
     } catch (error) {
       console.error('AIService - generateTasksFromPrompt error:', error);
       
-      await logSystem('error', 'AI_TASKS_GENERATION_FAILED', 
+      await logger.error('AI_TASKS_GENERATION_FAILED', 
         { projectId, prompt, error: error instanceof Error ? error.message : 'Unknown error' }, 
         userId, 
         ipAddress
@@ -187,66 +181,6 @@ export class AIService {
     } catch (error) {
       console.error('AIService - estimateTaskComplexity error:', error);
       return 'MEDIUM'; // Default fallback on error
-    }
-  }
-
-  static async suggestTaskAssignments(
-    taskDescription: string, 
-    projectId: string
-  ): Promise<string[]> {
-    if (!this.model) {
-      throw new Error('AI service not available');
-    }
-
-    try {
-      // Get project members for context
-      const projectMembers = await db.query(`
-        SELECT u.id, u.email, pm.role 
-        FROM project_members pm 
-        JOIN users u ON pm.user_id = u.id 
-        WHERE pm.project_id = $1
-      `, [projectId]);
-
-      const membersContext = projectMembers.rows.map(member => 
-        `${member.email} (${member.role})`
-      ).join(', ');
-
-      const prompt = `
-        Based on the task description and available team members, suggest which team members would be best suited for this task.
-        Consider their roles and the task requirements.
-        
-        Task: "${taskDescription}"
-        
-        Available Team Members: ${membersContext}
-        
-        Return ONLY a JSON array of user IDs that would be good candidates for this task.
-        Format: ["user_id_1", "user_id_2"]
-        
-        Suggested Assignments:
-      `;
-
-      const result = await this.model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text().trim();
-
-      const cleanText = text.replace(/```json\n?|\n?```/g, '').trim();
-      
-      try {
-        const suggestedIds = JSON.parse(cleanText);
-        if (Array.isArray(suggestedIds)) {
-          // Validate that suggested IDs are actual project members
-          const validMemberIds = projectMembers.rows.map(member => member.id);
-          return suggestedIds.filter((id: string) => validMemberIds.includes(id));
-        }
-      } catch (parseError) {
-        console.error('Failed to parse AI assignment suggestions:', cleanText);
-      }
-
-      return [];
-
-    } catch (error) {
-      console.error('AIService - suggestTaskAssignments error:', error);
-      return [];
     }
   }
 }

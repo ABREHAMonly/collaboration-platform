@@ -8,12 +8,9 @@ describe('Authentication Service', () => {
   let testUserId: string;
 
   beforeEach(async () => {
-    // Ensure database is connected
-    await db.connect();
-    
     // Clean up and create test user
     try {
-      await db.query('DELETE FROM users WHERE email LIKE $1', ['test%@example.com']);
+      await db.query('DELETE FROM users WHERE email = $1', ['test@example.com']);
     } catch (error) {
       // Table might not exist yet, that's okay
     }
@@ -61,6 +58,40 @@ describe('Authentication Service', () => {
       
       const user = await AuthService.validateUserCredentials('test@example.com', 'testpassword123');
       expect(user).toBeNull();
+    });
+  });
+
+  describe('user device management', () => {
+    it('should create and validate user device', async () => {
+      const refreshTokenHash = 'test-refresh-token-hash';
+      
+      await AuthService.createUserDevice(
+        testUserId,
+        refreshTokenHash,
+        '127.0.0.1',
+        'Test Agent'
+      );
+
+      const deviceInfo = await AuthService.validateRefreshToken(refreshTokenHash);
+      expect(deviceInfo).not.toBeNull();
+      expect(deviceInfo?.user.id).toBe(testUserId);
+    });
+
+    it('should revoke user device', async () => {
+      const refreshTokenHash = 'test-refresh-token-hash';
+      
+      await AuthService.createUserDevice(
+        testUserId,
+        refreshTokenHash,
+        '127.0.0.1',
+        'Test Agent'
+      );
+
+      const revoked = await AuthService.revokeUserDevice(refreshTokenHash);
+      expect(revoked).toBe(true);
+
+      const deviceInfo = await AuthService.validateRefreshToken(refreshTokenHash);
+      expect(deviceInfo).toBeNull();
     });
   });
 });

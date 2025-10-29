@@ -1,6 +1,7 @@
 // src/middleware/security.ts
 import { Request, Response, NextFunction } from 'express';
 import { env } from '../config/env.js';
+import { logger } from '../services/logger.js';
 
 export const securityHeaders = (req: Request, res: Response, next: NextFunction) => {
   // Security headers
@@ -37,26 +38,42 @@ export const csrfProtection = (req: Request, res: Response, next: NextFunction) 
 
 export const requestLogger = (req: Request, res: Response, next: NextFunction) => {
   const start = Date.now();
+  const user = (req as any).user;
   
   // Log request
-  logger.info('Request', {
+  logger.debug('Incoming request', {
     method: req.method,
     url: req.url,
     ip: req.ip,
-    userAgent: req.get('User-Agent')
+    userAgent: req.get('User-Agent'),
+    userId: user?.userId
   });
 
   // Log response
   res.on('finish', () => {
     const duration = Date.now() - start;
-    logger.info('Response', {
+    const logLevel = res.statusCode >= 400 ? 'warn' : 'debug';
+    
+    logger.log(logLevel, 'Request completed', {
       method: req.method,
       url: req.url,
       status: res.statusCode,
       duration: `${duration}ms`,
-      user: (req as any).user?.userId
+      userId: user?.userId
     });
   });
 
   next();
 };
+
+// Rate limiting configuration
+export const getRateLimitConfig = () => ({
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000'), // 15 minutes
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100'),
+  message: {
+    success: false,
+    message: 'Too many requests, please try again later.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false
+});

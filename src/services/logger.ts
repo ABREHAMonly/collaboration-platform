@@ -3,12 +3,19 @@ import winston from 'winston';
 import { db } from '../database/client.js';
 import { env } from '../config/env.js';
 
+// Ensure logs directory exists
+import { existsSync, mkdirSync } from 'fs';
+if (!existsSync('logs')) {
+  mkdirSync('logs', { recursive: true });
+}
+
 // Define log levels following your existing severity patterns
 const levels = {
   error: 0,
   warn: 1,
   info: 2,
-  security: 3
+  security: 3,
+  debug: 4
 };
 
 // Create file transport following your logging patterns
@@ -21,27 +28,46 @@ const fileTransport = new winston.transports.File({
   )
 });
 
+// Create error log file
+const errorFileTransport = new winston.transports.File({
+  filename: 'logs/error.log',
+  level: 'error',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  )
+});
+
 // Create console transport for development
 const consoleTransport = new winston.transports.Console({
-  level: env.logLevel,
+  level: env.nodeEnv === 'development' ? 'debug' : 'warn',
   format: winston.format.combine(
     winston.format.colorize(),
-    winston.format.simple()
+    winston.format.timestamp(),
+    winston.format.printf(({ timestamp, level, message, ...meta }) => {
+      return `${timestamp} [${level}]: ${message} ${
+        Object.keys(meta).length ? JSON.stringify(meta, null, 2) : ''
+      }`;
+    })
   )
 });
 
 // Main logger instance
 export const logger = winston.createLogger({
   levels,
-  level: 'security',
+  level: env.nodeEnv === 'development' ? 'debug' : 'info',
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.errors({ stack: true }),
     winston.format.json()
   ),
-  defaultMeta: { service: 'collaboration-platform' },
+  defaultMeta: { 
+    service: 'collaboration-platform',
+    environment: env.nodeEnv
+  },
   transports: [
     fileTransport,
+    errorFileTransport,
     ...(env.nodeEnv === 'development' ? [consoleTransport] : [])
   ]
 });
@@ -57,6 +83,9 @@ export class AuditLogger {
     message?: string;
   }): Promise<void> {
     try {
+      // Don't log to database in test environment
+      if (env.nodeEnv === 'test') return;
+
       const query = `
         INSERT INTO audit_logs (level, user_id, ip_address, action, details, message, timestamp)
         VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
@@ -67,7 +96,7 @@ export class AuditLogger {
         entry.userId,
         entry.ipAddress,
         entry.action,
-        JSON.stringify(entry.details),
+        typeof entry.details === 'string' ? entry.details : JSON.stringify(entry.details),
         entry.message
       ]);
     } catch (error) {
@@ -108,12 +137,20 @@ export class AuditLogger {
     level: 'info' | 'warn' | 'error',
     action: string,
     details: any,
-    userId?: string
+    userId?: string,
+    ipAddress?: string
   ): Promise<void> {
     const message = this.getSystemMessage(action, details);
     
-    logger.log(level, message, { userId, action, details });
-    await this.logToDatabase({ level, userId, action, details, message });
+    logger.log(level, message, { userId, ipAddress, action, details });
+    await this.logToDatabase({ 
+      level, 
+      userId, 
+      ipAddress, 
+      action, 
+      details, 
+      message 
+    });
   }
 
   // Activity tracker logs
