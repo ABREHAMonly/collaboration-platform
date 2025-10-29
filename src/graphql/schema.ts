@@ -256,6 +256,12 @@ export const typeDefs = gql`
 
     # Project members  
     projectMembers(projectId: ID!): [ProjectMember!]!
+
+    # Get tasks assigned to the current user
+    myAssignedTasks(status: TaskStatus): [Task!]!
+
+    # Get unread notification count
+    unreadNotificationCount: Int!
   }
 
   # Mutations
@@ -292,6 +298,9 @@ export const typeDefs = gql`
 
     # AI mutations
     generateTasksFromPrompt(input: AIGenerateTasksInput!): [Task!]!
+
+    # Delete a specific notification
+    deleteNotification(notificationId: ID!): Boolean!
   }
 
   # Subscriptions

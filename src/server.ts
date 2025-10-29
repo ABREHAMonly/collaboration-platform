@@ -171,18 +171,27 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   logger.info(`❤️ Health: http://localhost:${PORT}/api/health`);
 });
 
+
 // Graceful shutdown
 const gracefulShutdown = async (signal: string) => {
   logger.info(`📡 ${signal} received, starting graceful shutdown`);
   
+  // Dispose WebSocket server
   serverCleanup.dispose();
+  
+  // Stop Apollo Server
   await apolloServer.stop();
   
+  // Close database connections
+  await db.disconnect();
+  
+  // Close HTTP server
   httpServer.close(() => {
     logger.info('✅ HTTP server closed');
     process.exit(0);
   });
   
+  // Force shutdown after 10 seconds
   setTimeout(() => {
     logger.error('❌ Could not close connections in time, forcefully shutting down');
     process.exit(1);

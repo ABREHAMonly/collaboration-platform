@@ -1,6 +1,6 @@
 // src/services/taskService.ts
 import { db } from '../database/client.js';
-import { logSystem, logActivity } from '../services/logger.js';
+import { logger } from './logger.js';
 import { ForbiddenError, UserInputError } from 'apollo-server-express';
 import { ProjectService } from './projectService.js';
 import { NotificationService } from './notificationService.js';
@@ -58,24 +58,21 @@ export class TaskService {
         return task;
       });
 
-      await logSystem('info', 'TASK_CREATED', { taskId: result.id, projectId }, userId, ipAddress);
-      await logActivity('TASK_CREATED', { taskId: result.id, projectId }, userId, ipAddress);
+      await logger.info('TASK_CREATED', { taskId: result.id, projectId }, userId, ipAddress);
 
       // Get project to get workspace ID for subscription
       const project = await ProjectService.getProjectById(projectId);
       if (pubsub && project) {
+        const taskWithRelations = await this.enrichTaskWithRelations(result);
         pubsub.publish(`TASK_STATUS_UPDATED_${project.workspace_id}`, {
-          taskStatusUpdated: {
-            ...result,
-            status: result.status || 'TODO'
-          }
+          taskStatusUpdated: taskWithRelations
         });
       }
 
-      return result;
+      return await this.enrichTaskWithRelations(result);
 
     } catch (error) {
-      console.error('TaskService - createTask error:', error);
+      logger.error('TaskService - createTask error:', error);
       throw error;
     }
   }
@@ -144,6 +141,13 @@ export class TaskService {
 
         // Handle assignment updates if provided
         if (assignedToIds !== undefined) {
+          // Get current assignments to compare
+          const currentAssignments = await client.query(
+            `SELECT user_id FROM task_assignments WHERE task_id = $1`,
+            [taskId]
+          );
+          const currentAssignedIds = currentAssignments.rows.map(row => row.user_id);
+
           // Remove existing assignments
           await client.query(
             `DELETE FROM task_assignments WHERE task_id = $1`,
@@ -158,8 +162,8 @@ export class TaskService {
               [taskId, assignedUserId]
             );
 
-            // Create notification for newly assigned users
-            if (!await this.wasUserPreviouslyAssigned(taskId, assignedUserId)) {
+            // Create notification for newly assigned users (not previously assigned)
+            if (!currentAssignedIds.includes(assignedUserId)) {
               await NotificationService.createTaskAssignmentNotification(
                 assignedUserId,
                 taskId,
@@ -173,15 +177,11 @@ export class TaskService {
         return task;
       });
 
+      const updatedTask = await this.enrichTaskWithRelations(result);
+
       // Log status change if it occurred
       if (status !== undefined && status !== currentTask.status) {
-        await logSystem('info', 'TASK_STATUS_UPDATE', 
-          { taskId, oldStatus: currentTask.status, newStatus: status }, 
-          userId, 
-          ipAddress
-        );
-
-        await logActivity('TASK_STATUS_UPDATE', 
+        await logger.info('TASK_STATUS_UPDATE', 
           { taskId, oldStatus: currentTask.status, newStatus: status }, 
           userId, 
           ipAddress
@@ -191,15 +191,15 @@ export class TaskService {
         const project = await ProjectService.getProjectById(result.project_id);
         if (pubsub && project) {
           pubsub.publish(`TASK_STATUS_UPDATED_${project.workspace_id}`, {
-            taskStatusUpdated: result
+            taskStatusUpdated: updatedTask
           });
         }
       }
 
-      return result;
+      return updatedTask;
 
     } catch (error) {
-      console.error('TaskService - updateTask error:', error);
+      logger.error('TaskService - updateTask error:', error);
       throw error;
     }
   }
@@ -225,13 +225,12 @@ export class TaskService {
         [taskId]
       );
 
-      await logSystem('info', 'TASK_DELETED', { taskId, projectId: task.project_id }, userId, ipAddress);
-      await logActivity('TASK_DELETED', { taskId, projectId: task.project_id }, userId, ipAddress);
+      await logger.info('TASK_DELETED', { taskId, projectId: task.project_id }, userId, ipAddress);
 
       return true;
 
     } catch (error) {
-      console.error('TaskService - deleteTask error:', error);
+      logger.error('TaskService - deleteTask error:', error);
       throw error;
     }
   }
@@ -249,10 +248,10 @@ export class TaskService {
         return null;
       }
 
-      return task;
+      return await this.enrichTaskWithRelations(task);
 
     } catch (error) {
-      console.error('TaskService - getTask error:', error);
+      logger.error('TaskService - getTask error:', error);
       throw error;
     }
   }
@@ -265,7 +264,7 @@ export class TaskService {
       );
       return result.rows[0];
     } catch (error) {
-      console.error('TaskService - getTaskById error:', error);
+      logger.error('TaskService - getTaskById error:', error);
       throw error;
     }
   }
@@ -279,14 +278,25 @@ export class TaskService {
       }
 
       const result = await db.query(
-        `SELECT * FROM tasks WHERE project_id = $1 ORDER BY created_at DESC`,
+        `SELECT * FROM tasks WHERE project_id = $1 ORDER BY 
+          CASE status 
+            WHEN 'TODO' THEN 1
+            WHEN 'IN_PROGRESS' THEN 2  
+            WHEN 'DONE' THEN 3
+          END, created_at DESC`,
         [projectId]
       );
 
-      return result.rows;
+      // Enrich tasks with relations
+      const enrichedTasks = [];
+      for (const task of result.rows) {
+        enrichedTasks.push(await this.enrichTaskWithRelations(task));
+      }
+
+      return enrichedTasks;
 
     } catch (error) {
-      console.error('TaskService - getProjectTasks error:', error);
+      logger.error('TaskService - getProjectTasks error:', error);
       throw error;
     }
   }
@@ -311,7 +321,7 @@ export class TaskService {
       return false;
 
     } catch (error) {
-      console.error('TaskService - canUpdateTask error:', error);
+      logger.error('TaskService - canUpdateTask error:', error);
       return false;
     }
   }
@@ -324,7 +334,7 @@ export class TaskService {
       );
       return result.rows.length > 0;
     } catch (error) {
-      console.error('TaskService - isTaskAssignedToUser error:', error);
+      logger.error('TaskService - isTaskAssignedToUser error:', error);
       return false;
     }
   }
@@ -337,21 +347,87 @@ export class TaskService {
       );
       return result.rows.length > 0;
     } catch (error) {
-      console.error('TaskService - hasAnyAssignments error:', error);
+      logger.error('TaskService - hasAnyAssignments error:', error);
       return false;
     }
   }
 
-  private static async wasUserPreviouslyAssigned(taskId: string, userId: string): Promise<boolean> {
+  private static async enrichTaskWithRelations(task: any): Promise<any> {
     try {
-      const result = await db.query(
-        `SELECT 1 FROM task_assignments WHERE task_id = $1 AND user_id = $2`,
-        [taskId, userId]
+      // Get assigned users
+      const assignedUsersResult = await db.query(`
+        SELECT u.id, u.email, u.global_status 
+        FROM task_assignments ta 
+        JOIN users u ON ta.user_id = u.id 
+        WHERE ta.task_id = $1
+      `, [task.id]);
+
+      // Get project info
+      const projectResult = await db.query(
+        `SELECT id, name, workspace_id FROM projects WHERE id = $1`,
+        [task.project_id]
       );
-      return result.rows.length > 0;
+
+      // Get creator info
+      const creatorResult = await db.query(
+        `SELECT id, email FROM users WHERE id = $1`,
+        [task.created_by]
+      );
+
+      return {
+        ...task,
+        assignedTo: assignedUsersResult.rows.map(row => ({
+          id: row.id,
+          email: row.email,
+          globalStatus: row.global_status
+        })),
+        project: projectResult.rows[0] ? {
+          id: projectResult.rows[0].id,
+          name: projectResult.rows[0].name,
+          workspaceId: projectResult.rows[0].workspace_id
+        } : null,
+        createdBy: creatorResult.rows[0] ? {
+          id: creatorResult.rows[0].id,
+          email: creatorResult.rows[0].email
+        } : null
+      };
     } catch (error) {
-      console.error('TaskService - wasUserPreviouslyAssigned error:', error);
-      return false;
+      logger.error('TaskService - enrichTaskWithRelations error:', error);
+      return task; // Return basic task if enrichment fails
+    }
+  }
+
+  // Get tasks assigned to a specific user
+  static async getUserAssignedTasks(userId: string, status?: string): Promise<any[]> {
+    try {
+      let query = `
+        SELECT t.*, p.name as project_name, w.name as workspace_name
+        FROM tasks t
+        JOIN task_assignments ta ON t.id = ta.task_id
+        JOIN projects p ON t.project_id = p.id
+        JOIN workspaces w ON p.workspace_id = w.id
+        WHERE ta.user_id = $1
+      `;
+      const params: any[] = [userId];
+
+      if (status) {
+        query += ` AND t.status = $2`;
+        params.push(status);
+      }
+
+      query += ` ORDER BY t.due_date ASC NULLS LAST, t.created_at DESC`;
+
+      const result = await db.query(query, params);
+      
+      const enrichedTasks = [];
+      for (const task of result.rows) {
+        enrichedTasks.push(await this.enrichTaskWithRelations(task));
+      }
+
+      return enrichedTasks;
+    } catch (error) {
+      logger.error('TaskService - getUserAssignedTasks error:', error);
+      throw error;
     }
   }
 }
