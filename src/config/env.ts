@@ -1,34 +1,34 @@
 // src/config/env.ts - Enhanced for Cloud
 import { config } from 'dotenv';
-config();
+import { join } from 'path';
 
-// Determine which .env file to load based on environment
+// Load environment variables based on NODE_ENV
 const envFile = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.development';
-config({ path: envFile });
+config({ path: join(process.cwd(), envFile) });
+
+// Fallback to default .env if specific file doesn't exist
+config();
 
 const requiredVars = [
   'DATABASE_URL',
   'JWT_SECRET', 
-  'JWT_REFRESH_SECRET',
-  'NODE_ENV'
+  'JWT_REFRESH_SECRET'
 ];
 
-// For production, we might get DATABASE_URL from cloud provider
+// Cloud environment variable mapping
 if (process.env.NODE_ENV === 'production') {
-  // Cloud providers often use different env var names
-  if (!process.env.DATABASE_URL) {
-    // Try common cloud database env vars
-    process.env.DATABASE_URL = process.env.DATABASE_CONNECTION_STRING 
-      || process.env.POSTGRES_URL 
-      || process.env.DATABASE_URL;
-  }
+  // Map common cloud provider environment variables
+  process.env.DATABASE_URL = process.env.DATABASE_URL 
+    || process.env.DATABASE_CONNECTION_STRING 
+    || process.env.POSTGRES_URL 
+    || process.env.NEON_DATABASE_URL;
 }
 
-requiredVars.forEach(varName => {
-  if (!process.env[varName]) {
-    throw new Error(`Missing required environment variable: ${varName}`);
-  }
-});
+// Validate required environment variables
+const missingVars = requiredVars.filter(varName => !process.env[varName]);
+if (missingVars.length > 0) {
+  throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+}
 
 export const env = {
   databaseUrl: process.env.DATABASE_URL!,
@@ -42,12 +42,26 @@ export const env = {
   
   // Cloud-specific configurations
   isProduction: process.env.NODE_ENV === 'production',
-  isDevelopment: process.env.NODE_ENV === 'development',
+  isDevelopment: process.env.NODE_ENV === 'development' || !process.env.NODE_ENV,
   
   // CORS origins for production
   corsOrigins: process.env.CORS_ORIGINS 
     ? process.env.CORS_ORIGINS.split(',') 
     : (process.env.NODE_ENV === 'production' 
         ? ['https://yourapp.vercel.app'] 
-        : ['http://localhost:3000', 'http://localhost:5173'])
+        : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:4000']),
+        
+  // SSL configuration for production
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 } as const;
+
+// Log environment info (without secrets)
+console.log('🌍 Environment:', {
+  nodeEnv: env.nodeEnv,
+  port: env.port,
+  isProduction: env.isProduction,
+  isDevelopment: env.isDevelopment,
+  database: env.databaseUrl ? '✓ Configured' : '✗ Missing',
+  jwt: env.jwtSecret ? '✓ Configured' : '✗ Missing',
+  ai: env.geminiApiKey ? '✓ Enabled' : '✗ Disabled'
+});
