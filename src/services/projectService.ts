@@ -1,6 +1,6 @@
 // src/services/projectService.ts
 import { db } from '../database/client.js';
-import { logSystem, logActivity } from '../services/logger.js';
+import { logger } from './logger.js';
 import { ForbiddenError, UserInputError } from 'apollo-server-express';
 import { WorkspaceService } from './workspaceService.js';
 
@@ -36,13 +36,16 @@ export class ProjectService {
         return project;
       });
 
-      await logSystem('info', 'PROJECT_CREATED', { projectId: result.id, workspaceId }, userId, ipAddress);
-      await logActivity('PROJECT_CREATED', { projectId: result.id, workspaceId }, userId, ipAddress);
+      await logger.info('PROJECT_CREATED', { projectId: result.id, workspaceId }, userId, ipAddress);
 
-      return result;
+      return {
+        ...result,
+        createdBy: { id: userId },
+        workspace: { id: workspaceId }
+      };
 
     } catch (error) {
-      console.error('ProjectService - createProject error:', error);
+      logger.error('ProjectService - createProject error:', error);
       throw error;
     }
   }
@@ -50,46 +53,35 @@ export class ProjectService {
   static async getProject(projectId: string, userId: string): Promise<any> {
     try {
       // Check if user has access to project via workspace membership
-      const accessResult = await db.query(`
-        SELECT pm.role 
-        FROM project_members pm
-        JOIN projects p ON pm.project_id = p.id
-        WHERE pm.project_id = $1 AND pm.user_id = $2
-      `, [projectId, userId]);
+      const projectResult = await db.query(
+        `SELECT p.*, wm.role as workspace_role
+         FROM projects p
+         JOIN workspaces w ON p.workspace_id = w.id
+         LEFT JOIN workspace_members wm ON w.id = wm.workspace_id AND wm.user_id = $2
+         WHERE p.id = $1`,
+        [projectId, userId]
+      );
 
-      if (accessResult.rows.length === 0) {
-        // Check if user has workspace access
-        const projectResult = await db.query(
-          `SELECT workspace_id FROM projects WHERE id = $1`,
-          [projectId]
-        );
+      if (projectResult.rows.length === 0) {
+        return null;
+      }
 
-        if (projectResult.rows.length === 0) {
-          return null;
-        }
+      const project = projectResult.rows[0];
 
-        const workspaceId = projectResult.rows[0].workspace_id;
-        const hasWorkspaceAccess = await WorkspaceService.hasWorkspaceAccess(workspaceId, userId, 'VIEWER');
-        
-        if (!hasWorkspaceAccess) {
-          return null;
-        }
-
-        // User has workspace access but not explicit project membership - grant VIEWER role
+      // If user has workspace access but not project membership, auto-add as VIEWER
+      if (project.workspace_role && !await this.getProjectMemberRole(projectId, userId)) {
         await db.query(
           `INSERT INTO project_members (project_id, user_id, role) 
            VALUES ($1, $2, 'VIEWER') 
            ON CONFLICT (project_id, user_id) DO NOTHING`,
           [projectId, userId]
         );
-
-        return await this.getProjectById(projectId);
       }
 
       return await this.getProjectById(projectId);
 
     } catch (error) {
-      console.error('ProjectService - getProject error:', error);
+      logger.error('ProjectService - getProject error:', error);
       throw error;
     }
   }
@@ -100,9 +92,14 @@ export class ProjectService {
         `SELECT * FROM projects WHERE id = $1`,
         [projectId]
       );
-      return result.rows[0];
+      
+      return result.rows[0] ? {
+        ...result.rows[0],
+        createdBy: { id: result.rows[0].created_by },
+        workspace: { id: result.rows[0].workspace_id }
+      } : null;
     } catch (error) {
-      console.error('ProjectService - getProjectById error:', error);
+      logger.error('ProjectService - getProjectById error:', error);
       throw error;
     }
   }
@@ -118,19 +115,19 @@ export class ProjectService {
       const result = await db.query(
         `SELECT p.* 
          FROM projects p
-         LEFT JOIN project_members pm ON p.id = pm.project_id AND pm.user_id = $2
-         WHERE p.workspace_id = $1 AND (pm.user_id IS NOT NULL OR EXISTS (
-           SELECT 1 FROM workspace_members wm 
-           WHERE wm.workspace_id = p.workspace_id AND wm.user_id = $2
-         ))
+         WHERE p.workspace_id = $1
          ORDER BY p.created_at DESC`,
-        [workspaceId, userId]
+        [workspaceId]
       );
 
-      return result.rows;
+      return result.rows.map(row => ({
+        ...row,
+        createdBy: { id: row.created_by },
+        workspace: { id: row.workspace_id }
+      }));
 
     } catch (error) {
-      console.error('ProjectService - getWorkspaceProjects error:', error);
+      logger.error('ProjectService - getWorkspaceProjects error:', error);
       throw error;
     }
   }
@@ -143,7 +140,11 @@ export class ProjectService {
       const requesterProjectRole = await this.getProjectMemberRole(projectId, requesterId);
       const project = await this.getProjectById(projectId);
       
-      const isWorkspaceOwner = await WorkspaceService.hasWorkspaceAccess(project.workspace_id, requesterId, 'OWNER');
+      if (!project) {
+        throw new UserInputError('Project not found');
+      }
+
+      const isWorkspaceOwner = await WorkspaceService.hasWorkspaceAccess(project.workspace.id, requesterId, 'OWNER');
       const isProjectLead = requesterProjectRole === 'PROJECT_LEAD';
 
       if (!isProjectLead && !isWorkspaceOwner) {
@@ -170,13 +171,13 @@ export class ProjectService {
         throw new UserInputError('Member not found in project');
       }
 
-      await logSystem('info', 'PROJECT_ROLE_UPDATED', 
-        { projectId, targetUserId: userId, newRole: role }, 
-        requesterId, 
-        ipAddress
+      // Get user email for response
+      const userResult = await db.query(
+        `SELECT email FROM users WHERE id = $1`,
+        [userId]
       );
 
-      await logActivity('PROJECT_ROLE_UPDATED', 
+      await logger.info('PROJECT_ROLE_UPDATED', 
         { projectId, targetUserId: userId, newRole: role }, 
         requesterId, 
         ipAddress
@@ -184,13 +185,16 @@ export class ProjectService {
 
       return {
         id: result.rows[0].id,
-        user: { id: userId },
+        user: { 
+          id: userId,
+          email: userResult.rows[0].email
+        },
         role: result.rows[0].role,
         joinedAt: result.rows[0].created_at
       };
 
     } catch (error) {
-      console.error('ProjectService - updateProjectMemberRole error:', error);
+      logger.error('ProjectService - updateProjectMemberRole error:', error);
       throw error;
     }
   }
@@ -204,7 +208,7 @@ export class ProjectService {
 
       // Verify requester is PROJECT_LEAD or workspace OWNER
       const requesterProjectRole = await this.getProjectMemberRole(projectId, requesterId);
-      const isWorkspaceOwner = await WorkspaceService.hasWorkspaceAccess(project.workspace_id, requesterId, 'OWNER');
+      const isWorkspaceOwner = await WorkspaceService.hasWorkspaceAccess(project.workspace.id, requesterId, 'OWNER');
       const isProjectLead = requesterProjectRole === 'PROJECT_LEAD';
 
       if (!isProjectLead && !isWorkspaceOwner) {
@@ -216,13 +220,12 @@ export class ProjectService {
         [projectId]
       );
 
-      await logSystem('info', 'PROJECT_DELETED', { projectId, workspaceId: project.workspace_id }, requesterId, ipAddress);
-      await logActivity('PROJECT_DELETED', { projectId, workspaceId: project.workspace_id }, requesterId, ipAddress);
+      await logger.info('PROJECT_DELETED', { projectId, workspaceId: project.workspace.id }, requesterId, ipAddress);
 
       return true;
 
     } catch (error) {
-      console.error('ProjectService - deleteProject error:', error);
+      logger.error('ProjectService - deleteProject error:', error);
       throw error;
     }
   }
@@ -238,7 +241,7 @@ export class ProjectService {
       return result.rows.length > 0 ? result.rows[0].role : null;
 
     } catch (error) {
-      console.error('ProjectService - getProjectMemberRole error:', error);
+      logger.error('ProjectService - getProjectMemberRole error:', error);
       return null;
     }
   }
@@ -262,15 +265,55 @@ export class ProjectService {
         const project = await this.getProjectById(projectId);
         if (!project) return false;
 
-        return await WorkspaceService.hasWorkspaceAccess(project.workspace_id, userId, 'VIEWER');
+        return await WorkspaceService.hasWorkspaceAccess(project.workspace.id, userId, 'VIEWER');
       }
 
       const userRole = result.rows[0].role;
       return roleHierarchy[userRole] >= roleHierarchy[minimumRole];
 
     } catch (error) {
-      console.error('ProjectService - hasProjectAccess error:', error);
+      logger.error('ProjectService - hasProjectAccess error:', error);
       return false;
+    }
+  }
+
+  static async getProjectMembers(projectId: string, requesterId: string): Promise<any[]> {
+    try {
+      // Verify requester has access to project
+      const hasAccess = await this.hasProjectAccess(projectId, requesterId, 'VIEWER');
+      if (!hasAccess) {
+        throw new ForbiddenError('Access to project denied');
+      }
+
+      const result = await db.query(`
+        SELECT pm.*, u.email, u.global_status, u.created_at as user_created
+        FROM project_members pm 
+        JOIN users u ON pm.user_id = u.id 
+        WHERE pm.project_id = $1 
+        ORDER BY 
+          CASE pm.role 
+            WHEN 'PROJECT_LEAD' THEN 1 
+            WHEN 'CONTRIBUTOR' THEN 2 
+            WHEN 'VIEWER' THEN 3 
+          END,
+          pm.created_at
+      `, [projectId]);
+
+      return result.rows.map(row => ({
+        id: row.id,
+        user: {
+          id: row.user_id,
+          email: row.email,
+          globalStatus: row.global_status,
+          createdAt: row.user_created
+        },
+        role: row.role,
+        joinedAt: row.created_at
+      }));
+
+    } catch (error) {
+      logger.error('ProjectService - getProjectMembers error:', error);
+      throw error;
     }
   }
 
@@ -287,7 +330,7 @@ export class ProjectService {
       const result = await db.query(query, params);
       return parseInt(result.rows[0].count);
     } catch (error) {
-      console.error('ProjectService - countProjectLeads error:', error);
+      logger.error('ProjectService - countProjectLeads error:', error);
       return 0;
     }
   }

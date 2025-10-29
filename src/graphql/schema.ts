@@ -250,6 +250,12 @@ export const typeDefs = gql`
 
     # AI Features
     summarizeTask(input: AISummarizeInput!): String!
+
+    # Workspace members
+    workspaceMembers(workspaceId: ID!): [WorkspaceMember!]!
+
+    # Project members  
+    projectMembers(projectId: ID!): [ProjectMember!]!
   }
 
   # Mutations

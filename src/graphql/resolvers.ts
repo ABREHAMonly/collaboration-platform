@@ -495,36 +495,33 @@ export const resolvers = {
       } : null;
     },
 
-    members: async (workspace: any) => {
-      const result = await db.query(`
-        SELECT wm.*, u.email, u.global_status 
-        FROM workspace_members wm 
-        JOIN users u ON wm.user_id = u.id 
-        WHERE wm.workspace_id = $1 
-        ORDER BY wm.created_at
-      `, [workspace.id]);
-
-      return result.rows.map(row => ({
-        id: row.id,
-        user: {
-          id: row.user_id,
-          email: row.email,
-          globalStatus: row.global_status
-        },
-        role: row.role,
-        joinedAt: row.created_at
-      }));
+    members: async (workspace: any, _, context: any) => {
+      if (!context.user) throw new AuthenticationError('Authentication required');
+      
+      try {
+        return await WorkspaceService.getWorkspaceMembers(workspace.id, context.user.userId);
+      } catch (error) {
+        throw new ForbiddenError('Access to workspace members denied');
+      }
+    },
+    projects: async (workspace: any, _, context: any) => {
+      if (!context.user) throw new AuthenticationError('Authentication required');
+      return ProjectService.getWorkspaceProjects(workspace.id, context.user.userId);
     }
   },
 
-  Project: {
+   Project: {
     workspace: async (project: any) => {
       const result = await db.query(
         `SELECT * FROM workspaces WHERE id = $1`,
         [project.workspace_id]
       );
-      return result.rows[0];
+      return result.rows[0] ? {
+        ...result.rows[0],
+        createdBy: { id: result.rows[0].created_by }
+      } : null;
     },
+
 
     createdBy: async (project: any) => {
       const result = await db.query(
@@ -537,28 +534,19 @@ export const resolvers = {
       } : null;
     },
 
-    members: async (project: any) => {
-      const result = await db.query(`
-        SELECT pm.*, u.email, u.global_status 
-        FROM project_members pm 
-        JOIN users u ON pm.user_id = u.id 
-        WHERE pm.project_id = $1 
-        ORDER BY pm.created_at
-      `, [project.id]);
-
-      return result.rows.map(row => ({
-        id: row.id,
-        user: {
-          id: row.user_id,
-          email: row.email,
-          globalStatus: row.global_status
-        },
-        role: row.role,
-        joinedAt: row.created_at
-      }));
+    members: async (project: any, _, context: any) => {
+      if (!context.user) throw new AuthenticationError('Authentication required');
+      
+      try {
+        return await ProjectService.getProjectMembers(project.id, context.user.userId);
+      } catch (error) {
+        throw new ForbiddenError('Access to project members denied');
+      }
     },
-
-    tasks: async (project: any) => {
+    tasks: async (project: any, _, context: any) => {
+      if (!context.user) throw new AuthenticationError('Authentication required');
+      
+      // We'll implement this in Step 4 with TaskService
       const result = await db.query(
         `SELECT * FROM tasks WHERE project_id = $1 ORDER BY created_at DESC`,
         [project.id]

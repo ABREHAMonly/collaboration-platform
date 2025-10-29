@@ -1,6 +1,6 @@
 // src/services/workspaceService.ts
 import { db } from '../database/client.js';
-import { logSystem, logActivity } from '../services/logger.js';
+import { logger } from './logger.js';
 import { ForbiddenError, UserInputError } from 'apollo-server-express';
 
 export class WorkspaceService {
@@ -30,13 +30,15 @@ export class WorkspaceService {
         return workspace;
       });
 
-      await logSystem('info', 'WORKSPACE_CREATED', { workspaceId: result.id }, userId, ipAddress);
-      await logActivity('WORKSPACE_CREATED', { workspaceId: result.id }, userId, ipAddress);
+      await logger.info('WORKSPACE_CREATED', { workspaceId: result.id }, userId, ipAddress);
 
-      return result;
+      return {
+        ...result,
+        createdBy: { id: userId }
+      };
 
     } catch (error) {
-      console.error('WorkspaceService - createWorkspace error:', error);
+      logger.error('WorkspaceService - createWorkspace error:', error);
       throw error;
     }
   }
@@ -59,10 +61,13 @@ export class WorkspaceService {
         [workspaceId]
       );
 
-      return workspaceResult.rows[0];
+      return workspaceResult.rows[0] ? {
+        ...workspaceResult.rows[0],
+        createdBy: { id: workspaceResult.rows[0].created_by }
+      } : null;
 
     } catch (error) {
-      console.error('WorkspaceService - getWorkspace error:', error);
+      logger.error('WorkspaceService - getWorkspace error:', error);
       throw error;
     }
   }
@@ -77,10 +82,13 @@ export class WorkspaceService {
         ORDER BY w.created_at DESC
       `, [userId]);
 
-      return result.rows;
+      return result.rows.map(row => ({
+        ...row,
+        createdBy: { id: row.created_by }
+      }));
 
     } catch (error) {
-      console.error('WorkspaceService - getUserWorkspaces error:', error);
+      logger.error('WorkspaceService - getUserWorkspaces error:', error);
       throw error;
     }
   }
@@ -108,7 +116,7 @@ export class WorkspaceService {
 
       // Verify target user exists
       const userResult = await db.query(
-        `SELECT id FROM users WHERE id = $1`,
+        `SELECT id, email FROM users WHERE id = $1`,
         [userId]
       );
 
@@ -124,13 +132,7 @@ export class WorkspaceService {
         [workspaceId, userId, role]
       );
 
-      await logSystem('info', 'MEMBER_ADDED', 
-        { workspaceId, targetUserId: userId, role }, 
-        requesterId, 
-        ipAddress
-      );
-
-      await logActivity('MEMBER_ADDED', 
+      await logger.info('MEMBER_ADDED', 
         { workspaceId, targetUserId: userId, role }, 
         requesterId, 
         ipAddress
@@ -138,13 +140,16 @@ export class WorkspaceService {
 
       return {
         id: result.rows[0].id,
-        user: { id: userId },
+        user: { 
+          id: userId,
+          email: userResult.rows[0].email
+        },
         role: result.rows[0].role,
         joinedAt: result.rows[0].created_at
       };
 
     } catch (error) {
-      console.error('WorkspaceService - addWorkspaceMember error:', error);
+      logger.error('WorkspaceService - addWorkspaceMember error:', error);
       throw error;
     }
   }
@@ -177,13 +182,7 @@ export class WorkspaceService {
         throw new UserInputError('Member not found in workspace');
       }
 
-      await logSystem('info', 'MEMBER_REMOVED', 
-        { workspaceId, targetUserId: userId }, 
-        requesterId, 
-        ipAddress
-      );
-
-      await logActivity('MEMBER_REMOVED', 
+      await logger.info('MEMBER_REMOVED', 
         { workspaceId, targetUserId: userId }, 
         requesterId, 
         ipAddress
@@ -192,7 +191,7 @@ export class WorkspaceService {
       return true;
 
     } catch (error) {
-      console.error('WorkspaceService - removeWorkspaceMember error:', error);
+      logger.error('WorkspaceService - removeWorkspaceMember error:', error);
       throw error;
     }
   }
@@ -225,13 +224,13 @@ export class WorkspaceService {
         throw new UserInputError('Member not found in workspace');
       }
 
-      await logSystem('info', 'ROLE_UPDATED', 
-        { workspaceId, targetUserId: userId, newRole: role }, 
-        requesterId, 
-        ipAddress
+      // Get user email for response
+      const userResult = await db.query(
+        `SELECT email FROM users WHERE id = $1`,
+        [userId]
       );
 
-      await logActivity('ROLE_UPDATED', 
+      await logger.info('ROLE_UPDATED', 
         { workspaceId, targetUserId: userId, newRole: role }, 
         requesterId, 
         ipAddress
@@ -239,13 +238,16 @@ export class WorkspaceService {
 
       return {
         id: result.rows[0].id,
-        user: { id: userId },
+        user: { 
+          id: userId,
+          email: userResult.rows[0].email
+        },
         role: result.rows[0].role,
         joinedAt: result.rows[0].created_at
       };
 
     } catch (error) {
-      console.error('WorkspaceService - updateWorkspaceMemberRole error:', error);
+      logger.error('WorkspaceService - updateWorkspaceMemberRole error:', error);
       throw error;
     }
   }
@@ -272,7 +274,7 @@ export class WorkspaceService {
       return roleHierarchy[userRole] >= roleHierarchy[minimumRole];
 
     } catch (error) {
-      console.error('WorkspaceService - hasWorkspaceAccess error:', error);
+      logger.error('WorkspaceService - hasWorkspaceAccess error:', error);
       return false;
     }
   }
@@ -288,8 +290,49 @@ export class WorkspaceService {
       return result.rows.length > 0 ? result.rows[0].role : null;
 
     } catch (error) {
-      console.error('WorkspaceService - getWorkspaceMemberRole error:', error);
+      logger.error('WorkspaceService - getWorkspaceMemberRole error:', error);
       return null;
+    }
+  }
+
+  // Get all workspace members with their details
+  static async getWorkspaceMembers(workspaceId: string, requesterId: string): Promise<any[]> {
+    try {
+      // Verify requester has access to workspace
+      const hasAccess = await this.hasWorkspaceAccess(workspaceId, requesterId, 'VIEWER');
+      if (!hasAccess) {
+        throw new ForbiddenError('Access to workspace denied');
+      }
+
+      const result = await db.query(`
+        SELECT wm.*, u.email, u.global_status, u.created_at as user_created
+        FROM workspace_members wm 
+        JOIN users u ON wm.user_id = u.id 
+        WHERE wm.workspace_id = $1 
+        ORDER BY 
+          CASE wm.role 
+            WHEN 'OWNER' THEN 1 
+            WHEN 'MEMBER' THEN 2 
+            WHEN 'VIEWER' THEN 3 
+          END,
+          wm.created_at
+      `, [workspaceId]);
+
+      return result.rows.map(row => ({
+        id: row.id,
+        user: {
+          id: row.user_id,
+          email: row.email,
+          globalStatus: row.global_status,
+          createdAt: row.user_created
+        },
+        role: row.role,
+        joinedAt: row.created_at
+      }));
+
+    } catch (error) {
+      logger.error('WorkspaceService - getWorkspaceMembers error:', error);
+      throw error;
     }
   }
 }
