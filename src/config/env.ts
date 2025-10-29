@@ -81,7 +81,7 @@ export const env = {
   corsOrigins: process.env.CORS_ORIGINS 
     ? process.env.CORS_ORIGINS.split(',') 
     : (process.env.NODE_ENV === 'production' 
-        ? ['https://yourapp.vercel.app', 'https://yourapp.onrender.com'] 
+        ? ['https://yourapp.vercel.app', 'https://collaboration-platform-9ngo.onrender.com'] 
         : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:4000']),
         
   // SSL configuration

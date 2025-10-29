@@ -29,10 +29,11 @@ export const authenticateToken = async (req: Request, res: Response, next: NextF
 
     if (!token) {
       logger.warn('Authentication failed: no token provided', { ip: req.ip, path: req.path });
-      return res.status(401).json({
+       res.status(401).json({
         success: false,
         message: 'Authentication token required'
       });
+      return;
     }
 
     // Verify token
@@ -43,18 +44,22 @@ export const authenticateToken = async (req: Request, res: Response, next: NextF
 
     if (!user) {
       logger.warn('Authentication failed: user not found', { userId: decoded.userId, ip: req.ip });
-      return res.status(401).json({
+       res.status(401).json({
         success: false,
         message: 'User not found'
       });
+      return;
+
     }
 
     if (user.globalStatus === 'BANNED') {
       logger.warn('Authentication failed: user banned', { userId: decoded.userId, ip: req.ip });
-      return res.status(403).json({
+       res.status(403).json({
         success: false,
         message: 'Account has been suspended'
       });
+      return;
+
     }
 
     // Attach user to request
@@ -71,18 +76,22 @@ export const authenticateToken = async (req: Request, res: Response, next: NextF
     if (error instanceof Error) {
       if (error.message.includes('Invalid access token')) {
         logger.warn('Authentication failed: invalid token', { ip: req.ip });
-        return res.status(401).json({
+         res.status(401).json({
           success: false,
           message: 'Invalid token'
         });
+      return;
+
       }
 
       if (error.message.includes('Access token expired')) {
         logger.warn('Authentication failed: token expired', { ip: req.ip });
-        return res.status(401).json({
+         res.status(401).json({
           success: false,
           message: 'Token expired'
         });
+      return;
+
       }
     }
 
@@ -91,10 +100,12 @@ export const authenticateToken = async (req: Request, res: Response, next: NextF
       ip: req.ip 
     });
 
-    return res.status(500).json({
+     res.status(500).json({
       success: false,
       message: 'Authentication failed'
     });
+      return;
+
   }
 };
 
@@ -102,10 +113,12 @@ export const authenticateToken = async (req: Request, res: Response, next: NextF
 export const requireRole = (allowedRoles: string[]) => {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
-      return res.status(401).json({
+       res.status(401).json({
         success: false,
         message: 'Authentication required'
       });
+      return;
+
     }
 
     if (!allowedRoles.includes(req.user.globalStatus)) {
@@ -116,10 +129,12 @@ export const requireRole = (allowedRoles: string[]) => {
         ip: req.ip 
       });
       
-      return res.status(403).json({
+       res.status(403).json({
         success: false,
         message: 'Insufficient permissions'
       });
+      return;
+
     }
 
     next();
@@ -135,10 +150,12 @@ export const requireWorkspaceAccess = (minimumRole: string = 'VIEWER') => {
     // This will be implemented in the workspace service
     // For now, just pass through if authenticated
     if (!req.user) {
-      return res.status(401).json({
+       res.status(401).json({
         success: false,
         message: 'Authentication required'
       });
+      return;
+
     }
     next();
   };

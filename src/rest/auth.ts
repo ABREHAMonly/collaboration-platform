@@ -20,10 +20,12 @@ router.post('/login', async (req: Request, res: Response) => {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({
+       res.status(400).json({
         success: false,
         message: 'Email and password are required'
       });
+      return;
+
     }
 
     const cleanEmail = email.trim().toLowerCase();
@@ -36,10 +38,12 @@ router.post('/login', async (req: Request, res: Response) => {
     if (!user) {
       logger.warn('Login failed: invalid credentials', { email: cleanEmail, ip: req.ip });
       
-      return res.status(401).json({
+       res.status(401).json({
         success: false,
         message: 'Invalid credentials'
       });
+      return;
+
     }
 
     // Update last login
@@ -136,10 +140,12 @@ router.post('/refresh-token', async (req: Request, res: Response) => {
     const { refreshToken } = req.body;
 
     if (!refreshToken) {
-      return res.status(401).json({
+       res.status(401).json({
         success: false,
         message: 'Refresh token required'
       });
+      return;
+
     }
 
     // Verify refresh token
@@ -150,10 +156,12 @@ router.post('/refresh-token', async (req: Request, res: Response) => {
     const validationResult = await AuthService.validateRefreshToken(refreshTokenHash);
 
     if (!validationResult) {
-      return res.status(401).json({
+       res.status(401).json({
         success: false,
         message: 'Invalid or expired refresh token'
       });
+      return;
+
     }
 
     const { user, device } = validationResult;
@@ -192,10 +200,12 @@ router.post('/refresh-token', async (req: Request, res: Response) => {
       error.message.includes('Invalid refresh token') || 
       error.message.includes('Refresh token expired')
     )) {
-      return res.status(401).json({
+       res.status(401).json({
         success: false,
         message: error.message
       });
+      return;
+
     }
 
     res.status(500).json({
