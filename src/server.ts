@@ -1,4 +1,4 @@
-// src/server.ts - Final version with all middleware
+// src/server.ts - Fixed for Render deployment
 import express from 'express';
 import { createServer } from 'http';
 import { ApolloServer } from '@apollo/server';
@@ -23,12 +23,11 @@ import { securityHeaders, requestLogger } from './middleware/security.js';
 import { logger } from './services/logger.js';
 import { createWebSocketServer } from './graphql/subscription.js';
 
-// Custom XSS sanitizer (replace express-xss-sanitizer)
+// Custom XSS sanitizer
 const xssSanitizer = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (req.body) {
     const sanitize = (obj: any): any => {
       if (typeof obj === 'string') {
-        // Basic XSS prevention - remove script tags and dangerous attributes
         return obj.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
                  .replace(/on\w+=/gi, '');
       }
@@ -123,101 +122,141 @@ const apolloServer = new ApolloServer({
   introspection: env.isDevelopment,
   plugins: [
     {
-      requestDidStart: async () => ({
-        didResolveOperation: async (requestContext) => {
-          const user = (requestContext.contextValue as any)?.user;
-          logger.info('GraphQL Request', {
-            operationName: requestContext.request.operationName,
-            user: user?.userId,
-            environment: env.nodeEnv
-          });
-        },
-      })
+      async requestDidStart() {
+        return {
+          async didResolveOperation(requestContext) {
+            const user = (requestContext.contextValue as any)?.user;
+            logger.info('GraphQL Request', {
+              operationName: requestContext.request.operationName,
+              user: user?.userId,
+              environment: env.nodeEnv
+            });
+          },
+        };
+      }
     }
   ],
 });
 
-await apolloServer.start();
-
-// GraphQL endpoint (authenticated)
-app.use('/graphql', 
-  authenticateToken,
-  expressMiddleware(apolloServer, {
-    context: async ({ req, res }) => {
-      return {
-        user: (req as any).user,
-        req,
-        res,
-        db,
-        logger,
-        env
-      };
-    }
-  })
-);
-
 // Create WebSocket server for subscriptions
-const serverCleanup = createWebSocketServer(httpServer);
+const serverCleanup = createWebSocketServer(httpServer, schema);
 
-// 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'Route not found'
-  });
-});
+// Add WebSocket cleanup to Apollo Server plugins
+(apolloServer as any).plugins = [
+  ...(apolloServer as any).plugins || [],
+  {
+    async serverWillStart() {
+      return {
+        async drainServer() {
+          await serverCleanup.dispose();
+        },
+      };
+    },
+  },
+];
 
-// Global error handler
-app.use((error: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  logger.error('Unhandled error', {
-    error: error.message,
-    stack: env.isDevelopment ? error.stack : undefined,
-    url: req.url,
-    method: req.method,
-    ip: req.ip,
-    environment: env.nodeEnv
-  });
+// Initialize server
+async function startServer() {
+  try {
+    // Connect to database first
+    await db.connect();
+    logger.info('✅ Database connected successfully');
 
-  res.status(500).json({
-    success: false,
-    message: env.isProduction 
-      ? 'Internal server error' 
-      : error.message
-  });
-});
+    // Start Apollo Server
+    await apolloServer.start();
+    logger.info('✅ Apollo Server started');
 
-// Start server
-const PORT = env.port;
-httpServer.listen(PORT, '0.0.0.0', () => {
-  logger.info(`🚀 Server running on port ${PORT}`);
-  logger.info(`📊 Environment: ${env.nodeEnv}`);
-  logger.info(`🔗 GraphQL: http://localhost:${PORT}/graphql`);
-  logger.info(`🔗 REST API: http://localhost:${PORT}/api`);
-  logger.info(`🔗 Subscriptions: ws://localhost:${PORT}/graphql`);
-  logger.info(`📚 Documentation: http://localhost:${PORT}/api/docs`);
-  logger.info(`❤️ Health: http://localhost:${PORT}/api/health`);
-});
+    // GraphQL endpoint (authenticated)
+    app.use('/graphql', 
+      authenticateToken,
+      expressMiddleware(apolloServer, {
+        context: async ({ req, res }) => {
+          return {
+            user: (req as any).user,
+            req,
+            res,
+            db,
+            logger,
+            env
+          };
+        }
+      })
+    );
+
+    // 404 handler
+    app.use('*', (req, res) => {
+      res.status(404).json({
+        success: false,
+        message: 'Route not found'
+      });
+    });
+
+    // Global error handler
+    app.use((error: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+      logger.error('Unhandled error', {
+        error: error.message,
+        stack: env.isDevelopment ? error.stack : undefined,
+        url: req.url,
+        method: req.method,
+        ip: req.ip,
+        environment: env.nodeEnv
+      });
+
+      res.status(500).json({
+        success: false,
+        message: env.isProduction 
+          ? 'Internal server error' 
+          : error.message
+      });
+    });
+
+    // Start server
+    const PORT = env.port;
+    httpServer.listen(PORT, '0.0.0.0', () => {
+      logger.info(`🚀 Server running on port ${PORT}`);
+      logger.info(`📊 Environment: ${env.nodeEnv}`);
+      logger.info(`🔗 GraphQL: http://localhost:${PORT}/graphql`);
+      logger.info(`🔗 REST API: http://localhost:${PORT}/api`);
+      logger.info(`🔗 Subscriptions: ws://localhost:${PORT}/graphql`);
+      logger.info(`📚 Documentation: http://localhost:${PORT}/api/docs`);
+      logger.info(`❤️ Health: http://localhost:${PORT}/api/health`);
+    });
+
+  } catch (error) {
+    logger.error('❌ Failed to start server:', error);
+    process.exit(1);
+  }
+}
 
 // Graceful shutdown
 const gracefulShutdown = async (signal: string) => {
   logger.info(`📡 ${signal} received, starting graceful shutdown`);
   
-  serverCleanup.dispose();
-  await apolloServer.stop();
-  await db.disconnect();
-  
-  httpServer.close(() => {
-    logger.info('✅ HTTP server closed');
-    process.exit(0);
-  });
-  
-  setTimeout(() => {
-    logger.error('❌ Could not close connections in time, forcefully shutting down');
+  try {
+    await serverCleanup.dispose();
+    await apolloServer.stop();
+    await db.disconnect();
+    
+    httpServer.close(() => {
+      logger.info('✅ HTTP server closed');
+      process.exit(0);
+    });
+    
+    // Force close after 10 seconds
+    setTimeout(() => {
+      logger.error('❌ Could not close connections in time, forcefully shutting down');
+      process.exit(1);
+    }, 10000);
+  } catch (error) {
+    logger.error('❌ Error during shutdown:', error);
     process.exit(1);
-  }, 10000);
+  }
 };
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Start the server
+startServer();
 
 export default app;

@@ -1,4 +1,4 @@
-// src/rest/health.ts
+// src/rest/health.ts - Enhanced for production
 import { Router } from 'express';
 import { db } from '../database/client.js';
 import { logger } from '../services/logger.js';
@@ -12,15 +12,27 @@ interface HealthCheck {
   version: string;
   uptime: number;
   memory: NodeJS.MemoryUsage;
-  checks: {
-    database: 'connected' | 'disconnected' | 'unknown';
-    memory: 'healthy' | 'warning' | 'unknown';
-    disk: 'healthy' | 'warning' | 'unknown';
+  database: {
+    status: 'connected' | 'disconnected';
+    connectionAttempts: number;
+    responseTime?: number;
   };
-  error?: string; // 👈 optional field added here
+  system: {
+    nodeVersion: string;
+    platform: string;
+    arch: string;
+  };
+  checks: {
+    database: 'healthy' | 'unhealthy';
+    memory: 'healthy' | 'warning' | 'critical';
+    disk: 'healthy' | 'warning' | 'critical';
+  };
+  error?: string;
 }
 
 router.get('/health', async (req, res) => {
+  const startTime = Date.now();
+  
   const healthCheck: HealthCheck = {
     status: 'healthy',
     timestamp: new Date().toISOString(),
@@ -28,26 +40,62 @@ router.get('/health', async (req, res) => {
     version: process.env.npm_package_version || '1.0.0',
     uptime: process.uptime(),
     memory: process.memoryUsage(),
+    database: {
+      status: 'disconnected',
+      connectionAttempts: 0
+    },
+    system: {
+      nodeVersion: process.version,
+      platform: process.platform,
+      arch: process.arch
+    },
     checks: {
-      database: 'unknown',
-      memory: 'unknown',
-      disk: 'unknown'
+      database: 'unhealthy',
+      memory: 'healthy',
+      disk: 'healthy'
     }
   };
 
   try {
+    // Check database connection with timeout
+    const dbStartTime = Date.now();
     await db.query('SELECT 1');
-    healthCheck.checks.database = 'connected';
+    const dbResponseTime = Date.now() - dbStartTime;
+    
+    healthCheck.database = {
+      status: 'connected',
+      connectionAttempts: db.getConnectionStatus().attempts,
+      responseTime: dbResponseTime
+    };
+    healthCheck.checks.database = 'healthy';
 
+    // Check memory usage
     const used = process.memoryUsage();
     const memoryUsage = used.heapUsed / used.heapTotal;
-    healthCheck.checks.memory = memoryUsage < 0.8 ? 'healthy' : 'warning';
+    
+    if (memoryUsage > 0.9) {
+      healthCheck.checks.memory = 'critical';
+      healthCheck.status = 'unhealthy';
+    } else if (memoryUsage > 0.8) {
+      healthCheck.checks.memory = 'warning';
+    } else {
+      healthCheck.checks.memory = 'healthy';
+    }
 
-    res.status(200).json(healthCheck);
+    // Add response time
+    const totalResponseTime = Date.now() - startTime;
+    (healthCheck as any).responseTime = totalResponseTime;
+
+    // Set appropriate status code
+    const statusCode = healthCheck.status === 'healthy' ? 200 : 503;
+    
+    res.status(statusCode).json(healthCheck);
+    
   } catch (error) {
     healthCheck.status = 'unhealthy';
-    healthCheck.checks.database = 'disconnected';
+    healthCheck.checks.database = 'unhealthy';
     healthCheck.error = error instanceof Error ? error.message : 'Unknown error';
+    healthCheck.database.connectionAttempts = db.getConnectionStatus().attempts;
 
     logger.error('Health check failed', healthCheck);
     res.status(503).json(healthCheck);
@@ -60,20 +108,35 @@ router.get('/health/db', async (req, res) => {
       SELECT 
         (SELECT COUNT(*) FROM users) as user_count,
         (SELECT COUNT(*) FROM workspaces) as workspace_count,
+        (SELECT COUNT(*) FROM projects) as project_count,
         (SELECT COUNT(*) FROM tasks) as task_count,
-        (SELECT MAX(created_at) FROM audit_logs) as last_audit
+        (SELECT MAX(created_at) FROM audit_logs) as last_audit,
+        (SELECT version()) as postgres_version
     `);
 
     res.json({
       status: 'healthy',
-      stats: result.rows[0]
+      timestamp: new Date().toISOString(),
+      stats: result.rows[0],
+      connection: db.getConnectionStatus()
     });
   } catch (error) {
     res.status(503).json({
       status: 'unhealthy',
-      error: error instanceof Error ? error.message : 'Database error'
+      timestamp: new Date().toISOString(),
+      error: error instanceof Error ? error.message : 'Database error',
+      connection: db.getConnectionStatus()
     });
   }
+});
+
+// Simple health check for load balancers
+router.get('/health/ping', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    service: 'collaboration-platform'
+  });
 });
 
 export default router;

@@ -1,5 +1,5 @@
-# Dockerfile - Updated with curl for health checks
-FROM oven/bun:1.0.0-alpine AS base
+# Dockerfile - Fixed with correct Bun image
+FROM oven/bun:1-alpine AS base
 
 # Install PostgreSQL client AND curl for health checks
 RUN apk add --no-cache postgresql-client curl
@@ -38,6 +38,6 @@ EXPOSE 4000
 
 # Health check (using curl that we installed)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:4000/health || exit 1
+  CMD curl -f http://localhost:4000/api/health || exit 1
 
 CMD ["bun", "run", "start"]

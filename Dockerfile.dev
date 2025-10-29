@@ -1,5 +1,5 @@
-# Dockerfile.dev (Development)
-FROM oven/bun:1.0.0
+# Dockerfile.dev (Development) - Fixed image
+FROM oven/bun:1
 
 WORKDIR /app
 
