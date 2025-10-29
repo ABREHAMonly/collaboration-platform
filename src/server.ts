@@ -98,6 +98,25 @@ app.get('/api/test', (req, res) => {
   });
 });
 
+// Database test endpoint
+app.get('/api/db-test', async (req, res) => {
+  try {
+    const result = await db.query('SELECT NOW() as time, version() as version');
+    res.json({
+      success: true,
+      database: 'Connected',
+      time: result.rows[0].time,
+      version: result.rows[0].version
+    });
+  } catch (error) {
+    res.json({
+      success: false,
+      database: 'Connection failed',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
 app.get('/', (req, res) => {
   res.json({
     success: true,
@@ -109,7 +128,9 @@ app.get('/', (req, res) => {
       rest: '/api',
       health: '/api/health',
       docs: '/api/docs',
-      auth: '/api/auth'
+      auth: '/api/auth',
+      test: '/api/test',
+      dbTest: '/api/db-test'
     }
   });
 });
@@ -196,24 +217,6 @@ async function startServer() {
       })
     );
 
-    // FIX 2: 404 handler at the VERY END - INSIDE startServer
-    app.use('*', (req, res) => {
-      res.status(404).json({
-        success: false,
-        message: 'Route not found',
-        path: req.path,
-        method: req.method,
-        availableEndpoints: {
-          root: 'GET /',
-          health: 'GET /api/health',
-          test: 'GET /api/test',
-          docs: 'GET /api/docs',
-          auth: 'POST /api/auth/*',
-          graphql: 'POST /graphql'
-        }
-      });
-    });
-
     // Global error handler
     app.use((error: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
       logger.error('Unhandled error', {
@@ -230,6 +233,25 @@ async function startServer() {
         message: env.isProduction 
           ? 'Internal server error' 
           : error.message
+      });
+    });
+
+    // FIX 2: 404 handler at the VERY END - AFTER all other routes
+    app.use('*', (req, res) => {
+      res.status(404).json({
+        success: false,
+        message: 'Route not found',
+        path: req.path,
+        method: req.method,
+        availableEndpoints: {
+          root: 'GET /',
+          health: 'GET /api/health',
+          test: 'GET /api/test',
+          dbTest: 'GET /api/db-test',
+          docs: 'GET /api/docs',
+          auth: 'POST /api/auth/*',
+          graphql: 'POST /graphql'
+        }
       });
     });
 
