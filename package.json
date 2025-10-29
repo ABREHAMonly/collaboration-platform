@@ -8,6 +8,7 @@
     "start": "bun dist/server.js",
     "render:build": "bun run build",
     "test": "bun test",
+    "hotfix": "bun scripts/hotfix.js",
     "db:setup": "echo 'Auto-table creation is now built into the server startup'",
     "db:seed": "echo 'Auto-seeding is now built into the server startup'"
   },

@@ -292,26 +292,42 @@ class DatabaseClient {
 
       // Create a default workspace for the admin
       const adminId = result.rows[0].id;
-      const workspaceResult = await this.pool.query(
-        `INSERT INTO workspaces (name, description, created_by) 
-         VALUES ($1, $2, $3) 
-         ON CONFLICT (name, created_by) DO NOTHING
-         RETURNING id`,
-        ['My Workspace', 'Default workspace', adminId]
+      // First check if workspace already exists for this user
+      const existingWorkspace = await this.pool.query(
+        `SELECT id FROM workspaces WHERE name = $1 AND created_by = $2`,
+        ['My Workspace', adminId]
       );
 
-      if (workspaceResult.rows.length > 0) {
-        const workspaceId = workspaceResult.rows[0].id;
-        
-        // Add admin as workspace owner
+      let workspaceId;
+
+      if (existingWorkspace.rows.length === 0) {
+        // Create new workspace
+        const workspaceResult = await this.pool.query(
+          `INSERT INTO workspaces (name, description, created_by) 
+          VALUES ($1, $2, $3) 
+          RETURNING id`,
+          ['My Workspace', 'Default workspace', adminId]
+        );
+        workspaceId = workspaceResult.rows[0].id;
+        console.log('✅ Default workspace created');
+      } else {
+        workspaceId = existingWorkspace.rows[0].id;
+        console.log('✅ Default workspace already exists');
+      }
+
+      // Add admin as workspace owner (only if not already a member)
+      const existingMember = await this.pool.query(
+        `SELECT id FROM workspace_members WHERE workspace_id = $1 AND user_id = $2`,
+        [workspaceId, adminId]
+      );
+
+      if (existingMember.rows.length === 0) {
         await this.pool.query(
           `INSERT INTO workspace_members (workspace_id, user_id, role) 
-           VALUES ($1, $2, 'OWNER') 
-           ON CONFLICT (workspace_id, user_id) DO NOTHING`,
+          VALUES ($1, $2, 'OWNER')`,
           [workspaceId, adminId]
         );
-
-        console.log('✅ Default workspace created');
+        console.log('✅ Admin added as workspace owner');
       }
 
     } catch (error) {

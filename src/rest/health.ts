@@ -30,7 +30,7 @@ interface HealthCheck {
   error?: string;
 }
 
-router.get('/health', async (req, res) => {
+router.get('/', async (req, res) => {
   const startTime = Date.now();
   
   const healthCheck: HealthCheck = {
@@ -102,7 +102,7 @@ router.get('/health', async (req, res) => {
   }
 });
 
-router.get('/health/db', async (req, res) => {
+router.get('/db', async (req, res) => {
   try {
     const result = await db.query(`
       SELECT 
@@ -131,7 +131,7 @@ router.get('/health/db', async (req, res) => {
 });
 
 // Simple health check for load balancers
-router.get('/health/ping', (req, res) => {
+router.get('/ping', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
@@ -139,17 +139,19 @@ router.get('/health/ping', (req, res) => {
   });
 });
 
-// Add this route to src/rest/health.ts
-router.get('/health/db-status', async (req, res) => {
+router.get('/db-status', async (req, res) => {
   try {
     const connectionStatus = db.getConnectionStatus();
-    const initStatus = db.getInitializationStatus();
+    const initStatus = (db as any).getInitializationStatus ? (db as any).getInitializationStatus() : { isInitialized: true };
     
-    // Test if we can query users table (will fail if tables don't exist)
+    // Test if we can query users table
     let tablesExist = false;
+    let userCount = 0;
+    
     try {
-      await db.query('SELECT 1 FROM users LIMIT 1');
+      const usersResult = await db.query('SELECT COUNT(*) as count FROM users');
       tablesExist = true;
+      userCount = parseInt(usersResult.rows[0].count);
     } catch (error) {
       tablesExist = false;
     }
@@ -161,7 +163,8 @@ router.get('/health/db-status', async (req, res) => {
         connected: connectionStatus.isConnected,
         connectionAttempts: connectionStatus.attempts,
         tablesInitialized: initStatus.isInitialized,
-        tablesExist: tablesExist
+        tablesExist: tablesExist,
+        userCount: userCount
       },
       message: tablesExist ? 'Database is fully operational' : 'Tables are being created...'
     });
@@ -173,5 +176,4 @@ router.get('/health/db-status', async (req, res) => {
     });
   }
 });
-
 export default router;
