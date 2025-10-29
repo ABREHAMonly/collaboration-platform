@@ -5,9 +5,23 @@ import { logger } from '../services/logger.js';
 
 const router = Router();
 
-// Comprehensive health check
+interface HealthCheck {
+  status: 'healthy' | 'unhealthy';
+  timestamp: string;
+  environment?: string;
+  version: string;
+  uptime: number;
+  memory: NodeJS.MemoryUsage;
+  checks: {
+    database: 'connected' | 'disconnected' | 'unknown';
+    memory: 'healthy' | 'warning' | 'unknown';
+    disk: 'healthy' | 'warning' | 'unknown';
+  };
+  error?: string; // 👈 optional field added here
+}
+
 router.get('/health', async (req, res) => {
-  const healthCheck = {
+  const healthCheck: HealthCheck = {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV,
@@ -22,28 +36,24 @@ router.get('/health', async (req, res) => {
   };
 
   try {
-    // Test database connection
     await db.query('SELECT 1');
     healthCheck.checks.database = 'connected';
-    
-    // Test memory usage
+
     const used = process.memoryUsage();
     const memoryUsage = used.heapUsed / used.heapTotal;
     healthCheck.checks.memory = memoryUsage < 0.8 ? 'healthy' : 'warning';
-    
+
     res.status(200).json(healthCheck);
-    
   } catch (error) {
     healthCheck.status = 'unhealthy';
     healthCheck.checks.database = 'disconnected';
     healthCheck.error = error instanceof Error ? error.message : 'Unknown error';
-    
+
     logger.error('Health check failed', healthCheck);
     res.status(503).json(healthCheck);
   }
 });
 
-// Database status endpoint
 router.get('/health/db', async (req, res) => {
   try {
     const result = await db.query(`
@@ -53,7 +63,7 @@ router.get('/health/db', async (req, res) => {
         (SELECT COUNT(*) FROM tasks) as task_count,
         (SELECT MAX(created_at) FROM audit_logs) as last_audit
     `);
-    
+
     res.json({
       status: 'healthy',
       stats: result.rows[0]
