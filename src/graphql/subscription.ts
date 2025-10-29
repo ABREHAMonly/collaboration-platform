@@ -1,8 +1,6 @@
-// src/graphql/subscription.ts
-// src/graphql/subscription.ts - Fixed JWT token type issues
+// src/graphql/subscription.ts - Fixed for Apollo Server 4
 import { WebSocketServer } from 'ws';
 import { useServer } from 'graphql-ws/lib/use/ws';
-import { GraphQLSchema } from 'graphql';
 import { makeExecutableSchema } from '@graphql-tools/schema';
 import { typeDefs } from './schema.js';
 import { resolvers } from './resolvers.js';
@@ -11,32 +9,30 @@ import { db } from '../database/client.js';
 import { logger } from '../services/logger.js';
 
 // Create schema for subscriptions
-const schema: GraphQLSchema = makeExecutableSchema({ typeDefs, resolvers });
+const schema = makeExecutableSchema({ typeDefs, resolvers });
 
 interface WebSocketUser {
   userId: string;
   email: string;
 }
 
-// Extended JWT payload that includes standard fields
 interface JwtPayload {
   userId: string;
+  email: string;
+  globalStatus?: string;
   iat?: number;
   exp?: number;
 }
 
-export function createWebSocketServer(httpServer: any, graphqlSchema?: GraphQLSchema) {
+export function createWebSocketServer(httpServer: any) {
   const wsServer = new WebSocketServer({
     server: httpServer,
     path: '/graphql',
   });
 
-  // Use provided schema or create default one
-  const subscriptionSchema = graphqlSchema || schema;
-
   const serverCleanup = useServer(
     {
-      schema: subscriptionSchema,
+      schema,
       context: async (ctx) => {
         try {
           const token = (ctx.connectionParams?.authorization as string) || 
@@ -46,22 +42,24 @@ export function createWebSocketServer(httpServer: any, graphqlSchema?: GraphQLSc
             const cleanToken = token.replace('Bearer ', '');
             const decoded = verifyAccessToken(cleanToken) as JwtPayload;
             
-            const userResult = await db.query(
-              `SELECT id, email, global_status FROM users WHERE id = $1`,
-              [decoded.userId]
-            );
+            if (decoded && decoded.userId) {
+              const userResult = await db.query(
+                `SELECT id, email, global_status FROM users WHERE id = $1`,
+                [decoded.userId]
+              );
 
-            if (userResult.rows.length > 0 && userResult.rows[0].global_status !== 'BANNED') {
-              const user: WebSocketUser = {
-                userId: userResult.rows[0].id,
-                email: userResult.rows[0].email
-              };
-              
-              return {
-                user,
-                db,
-                logger
-              };
+              if (userResult.rows.length > 0 && userResult.rows[0].global_status !== 'BANNED') {
+                const user: WebSocketUser = {
+                  userId: userResult.rows[0].id,
+                  email: userResult.rows[0].email
+                };
+                
+                return {
+                  user,
+                  db,
+                  logger
+                };
+              }
             }
           }
         } catch (error) {

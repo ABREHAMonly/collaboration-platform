@@ -1,9 +1,7 @@
-// src/graphql/resolvers.ts
 // src/graphql/resolvers.ts - Fixed for Apollo Server 4
 import { GraphQLError } from 'graphql';
 import { db } from '../database/client.js';
 import { hashPassword, verifyPassword, generateResetToken, hashResetToken, generateTokens, setTokenCookies, TokenPayload } from '../utils/authUtils.js';
-import { AuthService } from '../services/authService.js';
 import { WorkspaceService } from '../services/workspaceService.js';
 import { ProjectService } from '../services/projectService.js';
 import { TaskService } from '../services/taskService.js';
@@ -42,9 +40,19 @@ class UserInputError extends GraphQLError {
 export const resolvers = {
   // Scalars
   DateTime: {
-    serialize: (value: any) => value,
+    serialize: (value: any) => {
+      if (value instanceof Date) {
+        return value.toISOString();
+      }
+      return value;
+    },
     parseValue: (value: any) => new Date(value),
-    parseLiteral: (ast: any) => new Date(ast.value)
+    parseLiteral: (ast: any) => {
+      if (ast.kind === 'StringValue') {
+        return new Date(ast.value);
+      }
+      return null;
+    }
   },
 
   JSON: {
@@ -52,14 +60,26 @@ export const resolvers = {
     parseValue: (value: any) => value,
     parseLiteral: (ast: any) => {
       switch (ast.kind) {
-        case 'StringValue': return JSON.parse(ast.value);
-        case 'ObjectValue': 
+        case 'StringValue': 
+          try {
+            return JSON.parse(ast.value);
+          } catch {
+            return ast.value;
+          }
+        case 'IntValue':
+          return parseInt(ast.value, 10);
+        case 'FloatValue':
+          return parseFloat(ast.value);
+        case 'BooleanValue':
+          return ast.value;
+        case 'ObjectValue':
           const obj: any = {};
           ast.fields.forEach((field: any) => {
             obj[field.name.value] = field.value.value;
           });
           return obj;
-        default: return null;
+        default:
+          return null;
       }
     }
   },
@@ -101,7 +121,17 @@ export const resolvers = {
 
     // Admin only
     getAllWorkspaces: async (_: any, __: any, context: any) => {
-      if (!context.user || context.user.globalStatus !== 'ADMIN') {
+      if (!context.user) {
+        throw new AuthenticationError('Authentication required');
+      }
+
+      // Check if user is admin
+      const userResult = await db.query(
+        `SELECT global_status FROM users WHERE id = $1`,
+        [context.user.userId]
+      );
+
+      if (userResult.rows.length === 0 || userResult.rows[0].global_status !== 'ADMIN') {
         throw new ForbiddenError('Admin access required');
       }
 
@@ -118,8 +148,18 @@ export const resolvers = {
       }));
     },
 
-    getAuditLogs: async (_: any, { level, userId, startDate, endDate, limit }: any, context: any) => {
-      if (!context.user || context.user.globalStatus !== 'ADMIN') {
+    getAuditLogs: async (_: any, { level, userId, startDate, endDate, limit = 50 }: any, context: any) => {
+      if (!context.user) {
+        throw new AuthenticationError('Authentication required');
+      }
+
+      // Check if user is admin
+      const userResult = await db.query(
+        `SELECT global_status FROM users WHERE id = $1`,
+        [context.user.userId]
+      );
+
+      if (userResult.rows.length === 0 || userResult.rows[0].global_status !== 'ADMIN') {
         throw new ForbiddenError('Admin access required');
       }
 
@@ -152,7 +192,7 @@ export const resolvers = {
       }
 
       query += ` ORDER BY timestamp DESC LIMIT $${paramCount + 1}`;
-      params.push(limit || 50);
+      params.push(limit);
 
       const result = await db.query(query, params);
       return result.rows;
@@ -180,100 +220,98 @@ export const resolvers = {
       return TaskService.getProjectTasks(projectId, context.user.userId);
     },
 
+    myAssignedTasks: async (_: any, { status }: { status?: string }, context: any) => {
+      if (!context.user) throw new AuthenticationError('Authentication required');
+      return TaskService.getUserAssignedTasks(context.user.userId, status);
+    },
+
     // Notifications
     myNotifications: async (_: any, { status }: { status?: string }, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
       return NotificationService.getUserNotifications(context.user.userId, status);
     },
 
+    unreadNotificationCount: async (_: any, __: any, context: any) => {
+      if (!context.user) throw new AuthenticationError('Authentication required');
+      return NotificationService.getUnreadCount(context.user.userId);
+    },
+
     // AI Features
     summarizeTask: async (_: any, { input }: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      if (!context.env.enableAI) throw new UserInputError('AI features are disabled');
-      
       return AIService.summarizeTask(input.taskDescription);
     },
 
-    // Additional queries
+    // Workspace members
     workspaceMembers: async (_: any, { workspaceId }: { workspaceId: string }, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
       return WorkspaceService.getWorkspaceMembers(workspaceId, context.user.userId);
     },
 
+    // Project members
     projectMembers: async (_: any, { projectId }: { projectId: string }, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
       return ProjectService.getProjectMembers(projectId, context.user.userId);
     },
-
-    myAssignedTasks: async (_: any, { status }: { status?: string }, context: any) => {
-      if (!context.user) throw new AuthenticationError('Authentication required');
-      return TaskService.getUserAssignedTasks(context.user.userId, status);
-    },
-
-    unreadNotificationCount: async (_: any, __: any, context: any) => {
-      if (!context.user) throw new AuthenticationError('Authentication required');
-      return NotificationService.getUnreadCount(context.user.userId);
-    }
   },
 
   // Mutation Resolvers
   Mutation: {
     // Authentication
-    // In the register mutation - fix the token payload
-register: async (_: any, { input }: any, context: any) => {
-  try {
-    const { email, password } = input;
-    
-    // Check if user already exists
-    const existingUser = await db.query(
-      `SELECT id FROM users WHERE email = $1`,
-      [email.toLowerCase()]
-    );
+    register: async (_: any, { input }: any, context: any) => {
+      try {
+        const { email, password } = input;
+        
+        // Check if user already exists
+        const existingUser = await db.query(
+          `SELECT id FROM users WHERE email = $1`,
+          [email.toLowerCase()]
+        );
 
-    if (existingUser.rows.length > 0) {
-      throw new UserInputError('User already exists with this email');
-    }
+        if (existingUser.rows.length > 0) {
+          throw new UserInputError('User already exists with this email');
+        }
 
-    // Hash password and create user
-    const passwordHash = await hashPassword(password);
-    const result = await db.query(
-      `INSERT INTO users (email, password_hash, global_status) 
-       VALUES ($1, $2, 'ACTIVE') 
-       RETURNING id, email, global_status, created_at`,
-      [email.toLowerCase(), passwordHash]
-    );
+        // Hash password and create user
+        const passwordHash = await hashPassword(password);
+        const result = await db.query(
+          `INSERT INTO users (email, password_hash, global_status) 
+           VALUES ($1, $2, 'ACTIVE') 
+           RETURNING id, email, global_status, created_at`,
+          [email.toLowerCase(), passwordHash]
+        );
 
-    const user = result.rows[0];
-    
-    // Generate tokens - fixed token payload
-    const tokenPayload: TokenPayload = {
-      userId: user.id,
-      email: user.email,
-      globalStatus: user.global_status // Add globalStatus
-    };
+        const user = result.rows[0];
+        
+        // Generate tokens
+        const tokenPayload: TokenPayload = {
+          userId: user.id,
+          email: user.email,
+          globalStatus: user.global_status
+        };
 
-    const tokens = generateTokens(tokenPayload);
-    setTokenCookies(context.res, tokens);
+        const tokens = generateTokens(tokenPayload);
+        setTokenCookies(context.res, tokens);
 
-    await logger.info('REGISTER_SUCCESS', { email }, user.id, context.req.ip);
+        await logger.info('REGISTER_SUCCESS', { email }, user.id, context.req?.ip);
 
-    return {
-      ...tokens,
-      user: {
-        id: user.id,
-        email: user.email,
-        globalStatus: user.global_status
+        return {
+          ...tokens,
+          user: {
+            id: user.id,
+            email: user.email,
+            globalStatus: user.global_status
+          }
+        };
+
+      } catch (error) {
+        await logger.error('REGISTER_FAILED', { 
+          email: input.email, 
+          error: error instanceof Error ? error.message : 'Unknown error' 
+        }, undefined, context.req?.ip);
+        throw error;
       }
-    };
-
-  } catch (error) {
-    await logger.error('REGISTER_FAILED', { 
-      email: input.email, 
-      error: error instanceof Error ? error.message : 'Unknown error' 
-    }, undefined, context.req.ip);
-    throw error;
-  }
-},
+    },
 
     forgotPassword: async (_: any, { input }: any, context: any) => {
       try {
@@ -293,7 +331,7 @@ register: async (_: any, { input }: any, context: any) => {
         const resetToken = generateResetToken();
         const resetTokenHash = hashResetToken(resetToken);
         
-        await logger.info('PASSWORD_RESET_REQUEST', { email }, user.id, context.req.ip);
+        await logger.info('PASSWORD_RESET_REQUEST', { email }, user.id, context.req?.ip);
         
         console.log(`Password reset token for ${email}: ${resetToken}`);
         // In production, send email with reset token
@@ -304,7 +342,7 @@ register: async (_: any, { input }: any, context: any) => {
         await logger.error('PASSWORD_RESET_REQUEST_FAILED', { 
           email: input.email,
           error: error instanceof Error ? error.message : 'Unknown error' 
-        }, undefined, context.req.ip);
+        }, undefined, context.req?.ip);
         throw error;
       }
     },
@@ -342,21 +380,29 @@ register: async (_: any, { input }: any, context: any) => {
           [newPasswordHash, userId]
         );
 
-        await logger.info('PASSWORD_UPDATED', {}, userId, context.req.ip);
+        await logger.info('PASSWORD_UPDATED', {}, userId, context.req?.ip);
 
         return true;
 
       } catch (error) {
         await logger.error('PASSWORD_UPDATE_FAILED', {
           error: error instanceof Error ? error.message : 'Unknown error'
-        }, context.user.userId, context.req.ip);
+        }, context.user.userId, context.req?.ip);
         throw error;
       }
     },
 
     // Admin mutations
     userBan: async (_: any, { userId }: { userId: string }, context: any) => {
-      if (!context.user || context.user.globalStatus !== 'ADMIN') {
+      if (!context.user) throw new AuthenticationError('Authentication required');
+
+      // Check if requester is admin
+      const requesterResult = await db.query(
+        `SELECT global_status FROM users WHERE id = $1`,
+        [context.user.userId]
+      );
+
+      if (requesterResult.rows.length === 0 || requesterResult.rows[0].global_status !== 'ADMIN') {
         throw new ForbiddenError('Admin access required');
       }
 
@@ -373,7 +419,7 @@ register: async (_: any, { input }: any, context: any) => {
       await logger.info('USER_BANNED', 
         { targetUserId: userId }, 
         context.user.userId, 
-        context.req.ip
+        context.req?.ip
       );
 
       return userResult.rows[0] ? {
@@ -383,7 +429,15 @@ register: async (_: any, { input }: any, context: any) => {
     },
 
     userUnban: async (_: any, { userId }: { userId: string }, context: any) => {
-      if (!context.user || context.user.globalStatus !== 'ADMIN') {
+      if (!context.user) throw new AuthenticationError('Authentication required');
+
+      // Check if requester is admin
+      const requesterResult = await db.query(
+        `SELECT global_status FROM users WHERE id = $1`,
+        [context.user.userId]
+      );
+
+      if (requesterResult.rows.length === 0 || requesterResult.rows[0].global_status !== 'ADMIN') {
         throw new ForbiddenError('Admin access required');
       }
 
@@ -400,7 +454,7 @@ register: async (_: any, { input }: any, context: any) => {
       await logger.info('USER_UNBANNED', 
         { targetUserId: userId }, 
         context.user.userId, 
-        context.req.ip
+        context.req?.ip
       );
 
       return userResult.rows[0] ? {
@@ -410,7 +464,15 @@ register: async (_: any, { input }: any, context: any) => {
     },
 
     adminResetPassword: async (_: any, { input }: any, context: any) => {
-      if (!context.user || context.user.globalStatus !== 'ADMIN') {
+      if (!context.user) throw new AuthenticationError('Authentication required');
+
+      // Check if requester is admin
+      const requesterResult = await db.query(
+        `SELECT global_status FROM users WHERE id = $1`,
+        [context.user.userId]
+      );
+
+      if (requesterResult.rows.length === 0 || requesterResult.rows[0].global_status !== 'ADMIN') {
         throw new ForbiddenError('Admin access required');
       }
 
@@ -425,7 +487,7 @@ register: async (_: any, { input }: any, context: any) => {
       await logger.info('ADMIN_RESET_PASSWORD', 
         { targetUserId: userId }, 
         context.user.userId, 
-        context.req.ip
+        context.req?.ip
       );
 
       return true;
@@ -434,54 +496,54 @@ register: async (_: any, { input }: any, context: any) => {
     // Workspace mutations
     createWorkspace: async (_: any, { input }: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      return WorkspaceService.createWorkspace(input, context.user.userId, context.req.ip);
+      return WorkspaceService.createWorkspace(input, context.user.userId, context.req?.ip);
     },
 
     addWorkspaceMember: async (_: any, { input }: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      return WorkspaceService.addWorkspaceMember(input, context.user.userId, context.req.ip);
+      return WorkspaceService.addWorkspaceMember(input, context.user.userId, context.req?.ip);
     },
 
     removeWorkspaceMember: async (_: any, { workspaceId, userId }: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      return WorkspaceService.removeWorkspaceMember(workspaceId, userId, context.user.userId, context.req.ip);
+      return WorkspaceService.removeWorkspaceMember(workspaceId, userId, context.user.userId, context.req?.ip);
     },
 
     updateWorkspaceMemberRole: async (_: any, { input }: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      return WorkspaceService.updateWorkspaceMemberRole(input, context.user.userId, context.req.ip);
+      return WorkspaceService.updateWorkspaceMemberRole(input, context.user.userId, context.req?.ip);
     },
 
     // Project mutations
     createProject: async (_: any, { input }: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      return ProjectService.createProject(input, context.user.userId, context.req.ip);
+      return ProjectService.createProject(input, context.user.userId, context.req?.ip);
     },
 
     updateProjectMemberRole: async (_: any, { input }: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      return ProjectService.updateProjectMemberRole(input, context.user.userId, context.req.ip);
+      return ProjectService.updateProjectMemberRole(input, context.user.userId, context.req?.ip);
     },
 
     deleteProject: async (_: any, { projectId }: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      return ProjectService.deleteProject(projectId, context.user.userId, context.req.ip);
+      return ProjectService.deleteProject(projectId, context.user.userId, context.req?.ip);
     },
 
     // Task mutations
     createTask: async (_: any, { input }: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      return TaskService.createTask(input, context.user.userId, context.req.ip, pubsub);
+      return TaskService.createTask(input, context.user.userId, context.req?.ip, pubsub);
     },
 
     updateTask: async (_: any, { input }: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      return TaskService.updateTask(input, context.user.userId, context.req.ip, pubsub);
+      return TaskService.updateTask(input, context.user.userId, context.req?.ip, pubsub);
     },
 
     deleteTask: async (_: any, { taskId }: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      return TaskService.deleteTask(taskId, context.user.userId, context.req.ip);
+      return TaskService.deleteTask(taskId, context.user.userId, context.req?.ip);
     },
 
     // Notification mutations
@@ -503,31 +565,14 @@ register: async (_: any, { input }: any, context: any) => {
     // AI mutations
     generateTasksFromPrompt: async (_: any, { input }: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      if (!context.env.enableAI) throw new UserInputError('AI features are disabled');
-      
-      return AIService.generateTasksFromPrompt(input, context.user.userId, context.req.ip, pubsub);
+      return AIService.generateTasksFromPrompt(input, context.user.userId, context.req?.ip, pubsub);
     }
   },
 
   // Subscription Resolvers
   Subscription: {
     taskStatusUpdated: {
-      subscribe: async (_: any, { workspaceId }: { workspaceId: string }, context: any) => {
-        if (!context.user) throw new AuthenticationError('Authentication required');
-        
-        // Verify user has access to workspace
-        const hasAccess = await WorkspaceService.hasWorkspaceAccess(
-          workspaceId, 
-          context.user.userId, 
-          'VIEWER'
-        );
-        
-        if (!hasAccess) {
-          throw new ForbiddenError('Access to workspace denied');
-        }
-
-        return pubsub.asyncIterator(`TASK_STATUS_UPDATED_${workspaceId}`);
-      }
+      subscribe: () => pubsub.asyncIterator(['TASK_STATUS_UPDATED'])
     }
   },
 
@@ -546,12 +591,7 @@ register: async (_: any, { input }: any, context: any) => {
 
     members: async (workspace: any, _: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      
-      try {
-        return await WorkspaceService.getWorkspaceMembers(workspace.id, context.user.userId);
-      } catch (error) {
-        throw new ForbiddenError('Access to workspace members denied');
-      }
+      return WorkspaceService.getWorkspaceMembers(workspace.id, context.user.userId);
     },
 
     projects: async (workspace: any, _: any, context: any) => {
@@ -585,12 +625,7 @@ register: async (_: any, { input }: any, context: any) => {
 
     members: async (project: any, _: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      
-      try {
-        return await ProjectService.getProjectMembers(project.id, context.user.userId);
-      } catch (error) {
-        throw new ForbiddenError('Access to project members denied');
-      }
+      return ProjectService.getProjectMembers(project.id, context.user.userId);
     },
 
     tasks: async (project: any, _: any, context: any) => {

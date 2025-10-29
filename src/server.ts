@@ -1,9 +1,8 @@
-// src/server.ts - Fixed for Render deployment
+// src/server.ts - Fixed for Apollo Server 4
 import express from 'express';
 import { createServer } from 'http';
 import { ApolloServer } from '@apollo/server';
 import { expressMiddleware } from '@apollo/server/express4';
-import { makeExecutableSchema } from '@graphql-tools/schema';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -114,11 +113,10 @@ app.use('/api/docs', docsRoutes);
 // REST routes
 app.use('/api/auth', authRoutes);
 
-// GraphQL setup
-const schema = makeExecutableSchema({ typeDefs, resolvers });
-
+// GraphQL setup - FIXED: Pass typeDefs and resolvers directly
 const apolloServer = new ApolloServer({
-  schema,
+  typeDefs,
+  resolvers,
   introspection: env.isDevelopment,
   plugins: [
     {
@@ -139,21 +137,7 @@ const apolloServer = new ApolloServer({
 });
 
 // Create WebSocket server for subscriptions
-const serverCleanup = createWebSocketServer(httpServer, schema);
-
-// Add WebSocket cleanup to Apollo Server plugins
-(apolloServer as any).plugins = [
-  ...(apolloServer as any).plugins || [],
-  {
-    async serverWillStart() {
-      return {
-        async drainServer() {
-          await serverCleanup.dispose();
-        },
-      };
-    },
-  },
-];
+const serverCleanup = createWebSocketServer(httpServer);
 
 // Initialize server
 async function startServer() {
