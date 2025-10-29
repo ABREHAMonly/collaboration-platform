@@ -49,6 +49,9 @@ const xssSanitizer = (req: express.Request, res: express.Response, next: express
 const app = express();
 const httpServer = createServer(app);
 
+// FIX 1: Trust proxy for production
+app.set('trust proxy', 1);
+
 // Security middleware first
 app.use(securityHeaders);
 app.use(helmet({
@@ -83,6 +86,32 @@ const authLimiter = rateLimit({
   message: 'Too many authentication attempts',
   standardHeaders: true,
   legacyHeaders: false,
+});
+
+// FIX 3: Add test routes early
+app.get('/api/test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Server is working!',
+    environment: env.nodeEnv,
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Collaboration Platform API',
+    version: '1.0.0',
+    environment: env.nodeEnv,
+    endpoints: {
+      graphql: '/graphql',
+      rest: '/api',
+      health: '/api/health',
+      docs: '/api/docs',
+      auth: '/api/auth'
+    }
+  });
 });
 
 app.use('/api/', apiLimiter);
@@ -167,11 +196,21 @@ async function startServer() {
       })
     );
 
-    // 404 handler
+    // FIX 2: 404 handler at the VERY END - INSIDE startServer
     app.use('*', (req, res) => {
       res.status(404).json({
         success: false,
-        message: 'Route not found'
+        message: 'Route not found',
+        path: req.path,
+        method: req.method,
+        availableEndpoints: {
+          root: 'GET /',
+          health: 'GET /api/health',
+          test: 'GET /api/test',
+          docs: 'GET /api/docs',
+          auth: 'POST /api/auth/*',
+          graphql: 'POST /graphql'
+        }
       });
     });
 
