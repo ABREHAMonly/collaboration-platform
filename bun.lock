@@ -43,9 +43,6 @@
         "eslint": "^8.54.0",
         "typescript": "^5.3.3",
       },
-      "peerDependencies": {
-        "typescript": "^5.0.0",
-      },
     },
   },
   "packages": {

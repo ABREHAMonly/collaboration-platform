@@ -18,17 +18,6 @@ services:
         generateValue: true
       - key: JWT_REFRESH_SECRET
         generateValue: true
-      - key: ENABLE_AI
-        value: false
-      - key: LOG_LEVEL
-        value: warn
       - key: PORT
         value: 4000
     healthCheckPath: /api/health
-    numInstances: 1
-
-databases:
-  - name: collaboration_platform
-    plan: free
-    databaseName: collaboration_platform
-    user: collaboration_platform_user
