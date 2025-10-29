@@ -1,4 +1,4 @@
-# docker-compose.yml
+# docker-compose.yml (Development)
 version: '3.8'
 services:
   postgres:
@@ -17,6 +17,31 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://admin:password@postgres:5432/collaboration_platform
+      JWT_SECRET: your-development-jwt-secret-change-in-production
+      JWT_REFRESH_SECRET: your-development-refresh-secret-change-in-production
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - /app/node_modules
+    develop:
+      watch:
+        - action: sync
+          path: .
+          target: /app
+        - action: rebuild
+          path: package.json
 
 volumes:
   postgres_data:

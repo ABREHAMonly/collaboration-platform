@@ -1,0 +1,25 @@
+# render.yaml
+services:
+  - type: web
+    name: collaboration-platform
+    env: docker
+    docker:
+      dockerfile: Dockerfile
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: collaboration_platform
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: ENABLE_AI
+        value: false
+
+databases:
+  - name: collaboration_platform
+    databaseName: collaboration_platform
+    user: admin
