@@ -1,9 +1,41 @@
 // src/services/authService.ts
 import { db } from '../database/client.js';
 import { hashPassword, verifyPassword } from '../utils/authUtils.js';
-import { logAuth } from '../services/logger.js';
+import { logger } from './logger.js';
 
 export class AuthService {
+  static async registerUser(email: string, password: string): Promise<any> {
+    try {
+      // Check if user already exists
+      const existingUser = await db.query(
+        `SELECT id FROM users WHERE email = $1`,
+        [email.toLowerCase()]
+      );
+
+      if (existingUser.rows.length > 0) {
+        throw new Error('User already exists with this email');
+      }
+
+      // Hash password and create user
+      const passwordHash = await hashPassword(password);
+      const result = await db.query(
+        `INSERT INTO users (email, password_hash, global_status) 
+         VALUES ($1, $2, 'ACTIVE') 
+         RETURNING id, email, global_status, created_at`,
+        [email.toLowerCase(), passwordHash]
+      );
+
+      return {
+        ...result.rows[0],
+        globalStatus: result.rows[0].global_status
+      };
+
+    } catch (error) {
+      logger.error('AuthService - registerUser error:', error);
+      throw error;
+    }
+  }
+
   static async validateUserCredentials(email: string, password: string): Promise<any> {
     try {
       const result = await db.query(
@@ -37,7 +69,7 @@ export class AuthService {
       };
 
     } catch (error) {
-      console.error('AuthService - validateUserCredentials error:', error);
+      logger.error('AuthService - validateUserCredentials error:', error);
       throw error;
     }
   }
@@ -49,7 +81,7 @@ export class AuthService {
         [userId]
       );
     } catch (error) {
-      console.error('AuthService - updateLastLogin error:', error);
+      logger.error('AuthService - updateLastLogin error:', error);
       throw error;
     }
   }
@@ -59,15 +91,18 @@ export class AuthService {
     refreshTokenHash: string, 
     ipAddress: string, 
     userAgent: string
-  ): Promise<void> {
+  ): Promise<string> {
     try {
-      await db.query(
+      const result = await db.query(
         `INSERT INTO user_devices (user_id, refresh_token_hash, ip_address, user_agent)
-         VALUES ($1, $2, $3, $4)`,
+         VALUES ($1, $2, $3, $4)
+         RETURNING id`,
         [userId, refreshTokenHash, ipAddress, userAgent]
       );
+      
+      return result.rows[0].id;
     } catch (error) {
-      console.error('AuthService - createUserDevice error:', error);
+      logger.error('AuthService - createUserDevice error:', error);
       throw error;
     }
   }
@@ -81,7 +116,7 @@ export class AuthService {
       
       return result.rowCount > 0;
     } catch (error) {
-      console.error('AuthService - revokeUserDevice error:', error);
+      logger.error('AuthService - revokeUserDevice error:', error);
       throw error;
     }
   }
@@ -99,7 +134,7 @@ export class AuthService {
       const result = await db.query(query, params);
       return result.rowCount || 0;
     } catch (error) {
-      console.error('AuthService - revokeAllUserDevices error:', error);
+      logger.error('AuthService - revokeAllUserDevices error:', error);
       throw error;
     }
   }
@@ -114,9 +149,17 @@ export class AuthService {
         [userId]
       );
 
-      return result.rows;
+      return result.rows.map(row => ({
+        ...row,
+        ipAddress: row.ip_address,
+        userAgent: row.user_agent,
+        deviceInfo: row.device_info,
+        loginTime: row.login_time,
+        isRevoked: row.is_revoked,
+        lastActive: row.last_active
+      }));
     } catch (error) {
-      console.error('AuthService - getUserDevices error:', error);
+      logger.error('AuthService - getUserDevices error:', error);
       throw error;
     }
   }
@@ -155,7 +198,7 @@ export class AuthService {
       };
 
     } catch (error) {
-      console.error('AuthService - validateRefreshToken error:', error);
+      logger.error('AuthService - validateRefreshToken error:', error);
       throw error;
     }
   }
@@ -172,7 +215,7 @@ export class AuthService {
         [newRefreshTokenHash, deviceId]
       );
     } catch (error) {
-      console.error('AuthService - updateDeviceRefreshToken error:', error);
+      logger.error('AuthService - updateDeviceRefreshToken error:', error);
       throw error;
     }
   }
@@ -186,11 +229,11 @@ export class AuthService {
         [newPasswordHash, userId]
       );
 
-      // Revoke all devices except current one for security
-      // This would be implemented when you have the current device context
+      // Revoke all devices for security after password change
+      await this.revokeAllUserDevices(userId);
 
     } catch (error) {
-      console.error('AuthService - changePassword error:', error);
+      logger.error('AuthService - changePassword error:', error);
       throw error;
     }
   }
@@ -208,7 +251,7 @@ export class AuthService {
         globalStatus: result.rows[0].global_status
       } : null;
     } catch (error) {
-      console.error('AuthService - getUserById error:', error);
+      logger.error('AuthService - getUserById error:', error);
       throw error;
     }
   }
@@ -222,7 +265,46 @@ export class AuthService {
 
       return result.rows.length > 0 && result.rows[0].global_status === 'ADMIN';
     } catch (error) {
-      console.error('AuthService - isUserAdmin error:', error);
+      logger.error('AuthService - isUserAdmin error:', error);
+      throw error;
+    }
+  }
+
+  static async banUser(userId: string, adminId: string): Promise<any> {
+    try {
+      const result = await db.query(
+        `UPDATE users SET global_status = 'BANNED' WHERE id = $1
+         RETURNING id, email, global_status`,
+        [userId]
+      );
+
+      // Revoke all active sessions
+      await this.revokeAllUserDevices(userId);
+
+      return result.rows[0] ? {
+        ...result.rows[0],
+        globalStatus: result.rows[0].global_status
+      } : null;
+    } catch (error) {
+      logger.error('AuthService - banUser error:', error);
+      throw error;
+    }
+  }
+
+  static async unbanUser(userId: string, adminId: string): Promise<any> {
+    try {
+      const result = await db.query(
+        `UPDATE users SET global_status = 'ACTIVE' WHERE id = $1
+         RETURNING id, email, global_status`,
+        [userId]
+      );
+
+      return result.rows[0] ? {
+        ...result.rows[0],
+        globalStatus: result.rows[0].global_status
+      } : null;
+    } catch (error) {
+      logger.error('AuthService - unbanUser error:', error);
       throw error;
     }
   }

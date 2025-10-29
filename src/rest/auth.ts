@@ -1,21 +1,20 @@
 // src/rest/auth.ts
 import { Router, Request, Response } from 'express';
-import { db } from '../database/client.js';
 import { 
   generateTokens, 
   verifyRefreshToken, 
   clearTokens, 
   hashRefreshToken,
-  verifyPassword,
+  setTokenCookies,
   TokenPayload
 } from '../utils/authUtils.js';
 import { AuthService } from '../services/authService.js';
-import { logAuth } from '../services/logger.js';
+import { logger } from '../services/logger.js';
 import { authenticateToken } from '../middleware/auth.js';
 
 const router = Router();
 
-// Login endpoint (REST - following your login pattern)
+// Login endpoint (REST)
 router.post('/login', async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
@@ -29,40 +28,13 @@ router.post('/login', async (req: Request, res: Response) => {
 
     const cleanEmail = email.trim().toLowerCase();
     
-    console.log('🔐 Login attempt:', { email: cleanEmail, ip: req.ip });
+    logger.info('Login attempt', { email: cleanEmail, ip: req.ip });
 
-    // Find user
-    const userResult = await db.query(
-      `SELECT id, email, password_hash, global_status FROM users WHERE email = $1`,
-      [cleanEmail]
-    );
+    // Validate user credentials
+    const user = await AuthService.validateUserCredentials(cleanEmail, password);
 
-    if (userResult.rows.length === 0) {
-      await logAuth('warn', 'LOGIN_FAILURE', { email: cleanEmail, reason: 'user_not_found' }, undefined, req.ip);
-      
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
-      });
-    }
-
-    const user = userResult.rows[0];
-
-    // Check if user is banned
-    if (user.global_status === 'BANNED') {
-      await logAuth('warn', 'LOGIN_FAILURE', { email: cleanEmail, reason: 'user_banned' }, user.id, req.ip);
-      
-      return res.status(403).json({
-        success: false,
-        message: 'Account has been suspended'
-      });
-    }
-
-    // Verify password
-    const isPasswordValid = await verifyPassword(password, user.password_hash);
-    
-    if (!isPasswordValid) {
-      await logAuth('warn', 'LOGIN_FAILURE', { email: cleanEmail, reason: 'invalid_password' }, user.id, req.ip);
+    if (!user) {
+      logger.warn('Login failed: invalid credentials', { email: cleanEmail, ip: req.ip });
       
       return res.status(401).json({
         success: false,
@@ -71,57 +43,51 @@ router.post('/login', async (req: Request, res: Response) => {
     }
 
     // Update last login
-    await db.query(
-      `UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = $1`,
-      [user.id]
-    );
+    await AuthService.updateLastLogin(user.id);
 
     // Generate tokens
     const tokenPayload: TokenPayload = {
       userId: user.id,
       email: user.email,
-      globalStatus: user.global_status
+      globalStatus: user.globalStatus
     };
 
-    const { accessToken, refreshToken } = generateTokens(res, tokenPayload);
+    const tokens = generateTokens(tokenPayload);
 
-    // Store device session (following your session pattern)
-    const refreshTokenHash = hashRefreshToken(refreshToken);
+    // Store device session
+    const refreshTokenHash = hashRefreshToken(tokens.refreshToken);
     
-    await db.query(
-      `INSERT INTO user_devices (user_id, refresh_token_hash, ip_address, user_agent, device_info)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [
-        user.id,
-        refreshTokenHash,
-        req.ip,
-        req.get('User-Agent') || '',
-        JSON.stringify({}) // You can enhance this with device detection
-      ]
+    await AuthService.createUserDevice(
+      user.id,
+      refreshTokenHash,
+      req.ip || 'unknown',
+      req.get('User-Agent') || ''
     );
 
-    // Log successful login
-    await logAuth('info', 'LOGIN_SUCCESS', { email: cleanEmail }, user.id, req.ip);
+    // Set HTTP-only cookies
+    setTokenCookies(res, tokens);
 
-    // Return response following your pattern
+    // Log successful login
+    logger.info('Login successful', { userId: user.id, email: cleanEmail, ip: req.ip });
+
+    // Return response
     res.status(200).json({
       success: true,
-      accessToken,
-      refreshToken,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
       user: {
         id: user.id,
         email: user.email,
-        globalStatus: user.global_status
+        globalStatus: user.globalStatus
       }
     });
 
   } catch (error) {
-    console.error('Login error:', error);
-    
-    await logAuth('error', 'LOGIN_FAILURE', { 
+    logger.error('Login error', { 
       error: error instanceof Error ? error.message : 'Unknown error',
-      email: req.body.email 
-    }, undefined, req.ip);
+      email: req.body.email,
+      ip: req.ip
+    });
 
     res.status(500).json({
       success: false,
@@ -138,18 +104,13 @@ router.post('/logout', authenticateToken, async (req: Request, res: Response) =>
 
     if (refreshToken) {
       const refreshTokenHash = hashRefreshToken(refreshToken);
-      
-      // Revoke the specific device session
-      await db.query(
-        `UPDATE user_devices SET is_revoked = true WHERE user_id = $1 AND refresh_token_hash = $2`,
-        [userId, refreshTokenHash]
-      );
+      await AuthService.revokeUserDevice(refreshTokenHash);
     }
 
     // Clear tokens from cookies
     clearTokens(res);
 
-    await logAuth('info', 'LOGOUT', {}, userId, req.ip);
+    logger.info('User logged out', { userId, ip: req.ip });
 
     res.status(200).json({
       success: true,
@@ -157,7 +118,11 @@ router.post('/logout', authenticateToken, async (req: Request, res: Response) =>
     });
 
   } catch (error) {
-    console.error('Logout error:', error);
+    logger.error('Logout error', { 
+      error: error instanceof Error ? error.message : 'Unknown error',
+      ip: req.ip
+    });
+    
     res.status(500).json({
       success: false,
       message: 'Logout failed'
@@ -181,73 +146,55 @@ router.post('/refresh-token', async (req: Request, res: Response) => {
     const decoded = verifyRefreshToken(refreshToken);
     const refreshTokenHash = hashRefreshToken(refreshToken);
 
-    // Check if token exists and is not revoked
-    const deviceResult = await db.query(
-      `SELECT ud.*, u.email, u.global_status 
-       FROM user_devices ud 
-       JOIN users u ON ud.user_id = u.id 
-       WHERE ud.refresh_token_hash = $1 AND ud.is_revoked = false`,
-      [refreshTokenHash]
-    );
+    // Validate refresh token in database
+    const validationResult = await AuthService.validateRefreshToken(refreshTokenHash);
 
-    if (deviceResult.rows.length === 0) {
+    if (!validationResult) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid refresh token'
+        message: 'Invalid or expired refresh token'
       });
     }
 
-    const device = deviceResult.rows[0];
-    const user = deviceResult.rows[0];
-
-    // Check if user is banned
-    if (user.global_status === 'BANNED') {
-      return res.status(403).json({
-        success: false,
-        message: 'Account has been suspended'
-      });
-    }
+    const { user, device } = validationResult;
 
     // Generate new tokens
     const tokenPayload: TokenPayload = {
       userId: user.id,
       email: user.email,
-      globalStatus: user.global_status
+      globalStatus: user.globalStatus
     };
 
-    const { accessToken: newAccessToken, refreshToken: newRefreshToken } = generateTokens(res, tokenPayload);
+    const newTokens = generateTokens(tokenPayload);
 
     // Update device with new refresh token
-    const newRefreshTokenHash = hashRefreshToken(newRefreshToken);
-    
-    await db.query(
-      `UPDATE user_devices 
-       SET refresh_token_hash = $1, last_active = CURRENT_TIMESTAMP 
-       WHERE id = $2`,
-      [newRefreshTokenHash, device.id]
-    );
+    const newRefreshTokenHash = hashRefreshToken(newTokens.refreshToken);
+    await AuthService.updateDeviceRefreshToken(device.id, newRefreshTokenHash);
 
-    await logAuth('info', 'REFRESH_TOKEN', {}, user.id, req.ip);
+    // Set new cookies
+    setTokenCookies(res, newTokens);
+
+    logger.info('Token refreshed', { userId: user.id, ip: req.ip });
 
     res.status(200).json({
       success: true,
-      accessToken: newAccessToken
+      accessToken: newTokens.accessToken,
+      refreshToken: newTokens.refreshToken
     });
 
   } catch (error) {
-    console.error('Refresh token error:', error);
-    
-    if (error instanceof Error && error.name === 'JsonWebTokenError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid refresh token'
-      });
-    }
+    logger.error('Refresh token error', { 
+      error: error instanceof Error ? error.message : 'Unknown error',
+      ip: req.ip
+    });
 
-    if (error instanceof Error && error.name === 'TokenExpiredError') {
+    if (error instanceof Error && (
+      error.message.includes('Invalid refresh token') || 
+      error.message.includes('Refresh token expired')
+    )) {
       return res.status(401).json({
         success: false,
-        message: 'Refresh token expired'
+        message: error.message
       });
     }
 
@@ -263,28 +210,59 @@ router.post('/revoke-all-sessions', authenticateToken, async (req: Request, res:
   try {
     const userId = (req as any).user.userId;
     const currentRefreshToken = req.cookies.refreshToken;
-    const currentRefreshTokenHash = hashRefreshToken(currentRefreshToken);
+    
+    let currentRefreshTokenHash: string | undefined;
+    if (currentRefreshToken) {
+      currentRefreshTokenHash = hashRefreshToken(currentRefreshToken);
+    }
 
-    // Revoke all sessions except current one
-    await db.query(
-      `UPDATE user_devices 
-       SET is_revoked = true 
-       WHERE user_id = $1 AND refresh_token_hash != $2`,
-      [userId, currentRefreshTokenHash]
-    );
+    const revokedCount = await AuthService.revokeAllUserDevices(userId, currentRefreshTokenHash);
 
-    await logAuth('info', 'REVOKE_ALL_SESSIONS', { sessionsRevoked: true }, userId, req.ip);
+    logger.info('All sessions revoked', { 
+      userId, 
+      sessionsRevoked: revokedCount,
+      ip: req.ip 
+    });
 
     res.status(200).json({
       success: true,
-      message: 'All other sessions revoked successfully'
+      message: `Revoked ${revokedCount} other sessions`,
+      sessionsRevoked: revokedCount
     });
 
   } catch (error) {
-    console.error('Revoke sessions error:', error);
+    logger.error('Revoke sessions error', { 
+      error: error instanceof Error ? error.message : 'Unknown error',
+      ip: req.ip
+    });
+    
     res.status(500).json({
       success: false,
       message: 'Failed to revoke sessions'
+    });
+  }
+});
+
+// Get user devices/sessions
+router.get('/sessions', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.userId;
+    const devices = await AuthService.getUserDevices(userId);
+
+    res.status(200).json({
+      success: true,
+      devices
+    });
+
+  } catch (error) {
+    logger.error('Get sessions error', { 
+      error: error instanceof Error ? error.message : 'Unknown error',
+      ip: req.ip
+    });
+    
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get sessions'
     });
   }
 });

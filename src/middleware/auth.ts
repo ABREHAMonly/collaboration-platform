@@ -1,13 +1,14 @@
 // src/middleware/auth.ts
 import { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, TokenPayload } from '../utils/authUtils.js';
-import { db } from '../database/client.js';
+import { AuthService } from '../services/authService.js';
+import { logger } from '../services/logger.js';
 
 declare global {
   namespace Express {
     interface Request {
       user?: TokenPayload & {
-        id: string; // Alias for userId for consistency
+        id: string;
       };
     }
   }
@@ -17,7 +18,7 @@ export const authenticateToken = async (req: Request, res: Response, next: NextF
   try {
     let token: string | undefined;
 
-    // Check cookies first (following your pattern)
+    // Check cookies first
     if (req.cookies?.accessToken) {
       token = req.cookies.accessToken;
     } 
@@ -27,6 +28,7 @@ export const authenticateToken = async (req: Request, res: Response, next: NextF
     }
 
     if (!token) {
+      logger.warn('Authentication failed: no token provided', { ip: req.ip, path: req.path });
       return res.status(401).json({
         success: false,
         message: 'Authentication token required'
@@ -37,21 +39,18 @@ export const authenticateToken = async (req: Request, res: Response, next: NextF
     const decoded = verifyAccessToken(token);
 
     // Check if user still exists and is active
-    const userResult = await db.query(
-      `SELECT id, email, global_status FROM users WHERE id = $1`,
-      [decoded.userId]
-    );
+    const user = await AuthService.getUserById(decoded.userId);
 
-    if (userResult.rows.length === 0) {
+    if (!user) {
+      logger.warn('Authentication failed: user not found', { userId: decoded.userId, ip: req.ip });
       return res.status(401).json({
         success: false,
         message: 'User not found'
       });
     }
 
-    const user = userResult.rows[0];
-
-    if (user.global_status === 'BANNED') {
+    if (user.globalStatus === 'BANNED') {
+      logger.warn('Authentication failed: user banned', { userId: decoded.userId, ip: req.ip });
       return res.status(403).json({
         success: false,
         message: 'Account has been suspended'
@@ -61,27 +60,37 @@ export const authenticateToken = async (req: Request, res: Response, next: NextF
     // Attach user to request
     req.user = {
       ...decoded,
-      id: decoded.userId // Add id alias for consistency
+      id: decoded.userId
     };
+
+    logger.debug('Authentication successful', { userId: decoded.userId, ip: req.ip });
 
     next();
 
   } catch (error) {
-    if (error instanceof Error && error.name === 'JsonWebTokenError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid token'
-      });
+    if (error instanceof Error) {
+      if (error.message.includes('Invalid access token')) {
+        logger.warn('Authentication failed: invalid token', { ip: req.ip });
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid token'
+        });
+      }
+
+      if (error.message.includes('Access token expired')) {
+        logger.warn('Authentication failed: token expired', { ip: req.ip });
+        return res.status(401).json({
+          success: false,
+          message: 'Token expired'
+        });
+      }
     }
 
-    if (error instanceof Error && error.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Token expired'
-      });
-    }
+    logger.error('Authentication error', { 
+      error: error instanceof Error ? error.message : 'Unknown error',
+      ip: req.ip 
+    });
 
-    console.error('Authentication error:', error);
     return res.status(500).json({
       success: false,
       message: 'Authentication failed'
@@ -100,6 +109,13 @@ export const requireRole = (allowedRoles: string[]) => {
     }
 
     if (!allowedRoles.includes(req.user.globalStatus)) {
+      logger.warn('Authorization failed: insufficient permissions', { 
+        userId: req.user.userId, 
+        role: req.user.globalStatus,
+        requiredRoles: allowedRoles,
+        ip: req.ip 
+      });
+      
       return res.status(403).json({
         success: false,
         message: 'Insufficient permissions'
@@ -113,10 +129,47 @@ export const requireRole = (allowedRoles: string[]) => {
 // Admin-only middleware
 export const requireAdmin = requireRole(['ADMIN']);
 
-// Workspace authorization middleware (will be enhanced in workspace service)
+// Workspace authorization middleware (placeholder for now)
 export const requireWorkspaceAccess = (minimumRole: string = 'VIEWER') => {
   return async (req: Request, res: Response, next: NextFunction) => {
     // This will be implemented in the workspace service
+    // For now, just pass through if authenticated
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
     next();
   };
+};
+
+// Optional authentication middleware (attaches user if available)
+export const optionalAuth = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    let token: string | undefined;
+
+    if (req.cookies?.accessToken) {
+      token = req.cookies.accessToken;
+    } else if (req.headers.authorization?.startsWith('Bearer ')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+
+    if (token) {
+      const decoded = verifyAccessToken(token);
+      const user = await AuthService.getUserById(decoded.userId);
+      
+      if (user && user.globalStatus !== 'BANNED') {
+        req.user = {
+          ...decoded,
+          id: decoded.userId
+        };
+      }
+    }
+
+    next();
+  } catch (error) {
+    // Continue without authentication on token errors
+    next();
+  }
 };
