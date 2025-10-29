@@ -1,7 +1,21 @@
-// src/services/workspaceService.ts
+// src/services/workspaceService.ts - Fixed for Apollo Server 4
 import { db } from '../database/client.js';
 import { logger } from './logger.js';
-import { ForbiddenError, UserInputError } from 'apollo-server-express';
+
+// Custom error classes for services
+class ForbiddenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ForbiddenError';
+  }
+}
+
+class UserInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UserInputError';
+  }
+}
 
 export class WorkspaceService {
   static async createWorkspace(input: any, userId: string, ipAddress?: string): Promise<any> {
@@ -255,10 +269,10 @@ export class WorkspaceService {
   static async hasWorkspaceAccess(workspaceId: string, userId: string, minimumRole: string = 'VIEWER'): Promise<boolean> {
     try {
       const roleHierarchy: Record<string, number> = {
-  'VIEWER': 1,
-  'MEMBER': 2,
-  'OWNER': 3
-};
+        'VIEWER': 1,
+        'MEMBER': 2,
+        'OWNER': 3
+      };
 
       const result = await db.query(
         `SELECT role FROM workspace_members 

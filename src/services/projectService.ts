@@ -1,8 +1,22 @@
-// src/services/projectService.ts
+// src/services/projectService.ts - Fixed for Apollo Server 4
 import { db } from '../database/client.js';
 import { logger } from './logger.js';
-import { ForbiddenError, UserInputError } from 'apollo-server-express';
 import { WorkspaceService } from './workspaceService.js';
+
+// Custom error classes for services
+class ForbiddenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ForbiddenError';
+  }
+}
+
+class UserInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UserInputError';
+  }
+}
 
 export class ProjectService {
   static async createProject(input: any, userId: string, ipAddress?: string): Promise<any> {
@@ -249,10 +263,10 @@ export class ProjectService {
   static async hasProjectAccess(projectId: string, userId: string, minimumRole: string = 'VIEWER'): Promise<boolean> {
     try {
       const roleHierarchy: Record<string, number> = {
-  'VIEWER': 1,
-  'MEMBER': 2,
-  'OWNER': 3
-};
+        'VIEWER': 1,
+        'CONTRIBUTOR': 2,
+        'PROJECT_LEAD': 3
+      };
 
       const result = await db.query(
         `SELECT role FROM project_members 

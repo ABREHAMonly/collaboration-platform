@@ -1,12 +1,19 @@
-// src/services/aiService.ts
+// src/services/aiService.ts - Fixed for Apollo Server 4
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { env } from '../config/env.js';
 import { db } from '../database/client.js';
 import { logger } from './logger.js';
 import { TaskService } from './taskService.js';
 import { ProjectService } from './projectService.js';
-import { ForbiddenError } from 'apollo-server-express';
 import { PubSub } from 'graphql-subscriptions';
+
+// Custom error classes for services
+class ForbiddenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ForbiddenError';
+  }
+}
 
 export class AIService {
   private static genAI: GoogleGenerativeAI | null = null;
