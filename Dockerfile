@@ -1,4 +1,4 @@
-# Dockerfile - Final version for Bun on Render
+# Dockerfile - Fixed with dependency cleanup
 FROM oven/bun:1-alpine
 
 # Install system dependencies
@@ -12,8 +12,9 @@ WORKDIR /app
 # Copy package files first for better caching
 COPY package.json ./
 
-# Install dependencies
-RUN bun install
+# Clean any problematic dependencies and install
+RUN bun remove "@apollo/server/express4" 2>/dev/null || true && \
+    bun install
 
 # Copy source code
 COPY . .
@@ -21,9 +22,8 @@ COPY . .
 # Create necessary directories
 RUN mkdir -p logs dist
 
-# Build the application with better error handling
-RUN echo "🔨 Building application..." && \
-    bun run build || (echo "❌ Build failed, checking for TypeScript errors..." && bun run dev --smoke)
+# Build the application
+RUN bun run build
 
 # Verify build output
 RUN if [ -f "dist/server.js" ]; then \
