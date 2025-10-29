@@ -146,7 +146,7 @@ export class TaskService {
             `SELECT user_id FROM task_assignments WHERE task_id = $1`,
             [taskId]
           );
-          const currentAssignedIds = currentAssignments.rows.map(row => row.user_id);
+          const currentAssignedIds = currentAssignments.rows.map((row: any) => row.user_id);
 
           // Remove existing assignments
           await client.query(
@@ -376,7 +376,7 @@ export class TaskService {
 
       return {
         ...task,
-        assignedTo: assignedUsersResult.rows.map(row => ({
+        assignedTo: assignedUsersResult.rows.map((row: any) => ({
           id: row.id,
           email: row.email,
           globalStatus: row.global_status

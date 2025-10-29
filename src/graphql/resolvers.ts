@@ -1,14 +1,14 @@
 // src/graphql/resolvers.ts
 import { AuthenticationError, ForbiddenError, UserInputError } from 'apollo-server-express';
 import { db } from '../database/client.js';
-import { hashPassword, verifyPassword, generateResetToken, hashResetToken } from '../utils/authUtils.js';
+import { hashPassword, verifyPassword, generateResetToken, hashResetToken, generateTokens, setTokenCookies } from '../utils/authUtils.js';
 import { AuthService } from '../services/authService.js';
 import { WorkspaceService } from '../services/workspaceService.js';
 import { ProjectService } from '../services/projectService.js';
 import { TaskService } from '../services/taskService.js';
 import { NotificationService } from '../services/notificationService.js';
 import { AIService } from '../services/aiService.js';
-import { logAuth, logSystem, logActivity } from '../services/logger.js';
+import { logger } from '../services/logger.js';
 import { PubSub } from 'graphql-subscriptions';
 
 const pubsub = new PubSub();
@@ -204,11 +204,10 @@ export const resolvers = {
           globalStatus: user.global_status
         };
 
-        // Note: For GraphQL, tokens are returned in response, not cookies
-        const { generateTokens } = await import('../utils/authUtils.js');
-        const tokens = generateTokens(context.res, tokenPayload);
+        const tokens = generateTokens(tokenPayload);
+        setTokenCookies(context.res, tokens);
 
-        await logAuth('info', 'REGISTER_SUCCESS', { email }, user.id, context.req.ip);
+        await logger.info('REGISTER_SUCCESS', { email }, user.id, context.req.ip);
 
         return {
           ...tokens,
@@ -220,7 +219,7 @@ export const resolvers = {
         };
 
       } catch (error) {
-        await logAuth('error', 'REGISTER_FAILED', { 
+        await logger.error('REGISTER_FAILED', { 
           email: input.email, 
           error: error instanceof Error ? error.message : 'Unknown error' 
         }, undefined, context.req.ip);
@@ -249,7 +248,7 @@ export const resolvers = {
         // Store reset token (you might want a separate table for password resets)
         // For now, we'll log it and in a real app, you'd send an email
         
-        await logAuth('info', 'PASSWORD_RESET_REQUEST', { email }, user.id, context.req.ip);
+        await logger.info('PASSWORD_RESET_REQUEST', { email }, user.id, context.req.ip);
         
         console.log(`Password reset token for ${email}: ${resetToken}`);
         // In production, send email with reset token
@@ -257,7 +256,7 @@ export const resolvers = {
         return true;
 
       } catch (error) {
-        await logAuth('error', 'PASSWORD_RESET_REQUEST_FAILED', { 
+        await logger.error('PASSWORD_RESET_REQUEST_FAILED', { 
           email: input.email,
           error: error instanceof Error ? error.message : 'Unknown error' 
         }, undefined, context.req.ip);
@@ -298,12 +297,12 @@ export const resolvers = {
           [newPasswordHash, userId]
         );
 
-        await logAuth('info', 'PASSWORD_UPDATED', {}, userId, context.req.ip);
+        await logger.info('PASSWORD_UPDATED', {}, userId, context.req.ip);
 
         return true;
 
       } catch (error) {
-        await logAuth('error', 'PASSWORD_UPDATE_FAILED', {
+        await logger.error('PASSWORD_UPDATE_FAILED', {
           error: error instanceof Error ? error.message : 'Unknown error'
         }, context.user.userId, context.req.ip);
         throw error;
@@ -326,7 +325,7 @@ export const resolvers = {
         [userId]
       );
 
-      await logAuth('security', 'USER_BANNED', 
+      await logger.info('USER_BANNED', 
         { targetUserId: userId }, 
         context.user.userId, 
         context.req.ip
@@ -353,7 +352,7 @@ export const resolvers = {
         [userId]
       );
 
-      await logAuth('security', 'USER_UNBANNED', 
+      await logger.info('USER_UNBANNED', 
         { targetUserId: userId }, 
         context.user.userId, 
         context.req.ip
@@ -378,7 +377,7 @@ export const resolvers = {
         [newPasswordHash, userId]
       );
 
-      await logAuth('security', 'ADMIN_RESET_PASSWORD', 
+      await logger.info('ADMIN_RESET_PASSWORD', 
         { targetUserId: userId }, 
         context.user.userId, 
         context.req.ip
@@ -495,7 +494,7 @@ export const resolvers = {
       } : null;
     },
 
-    members: async (workspace: any, _, context: any) => {
+    members: async (workspace: any, _: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
       
       try {
@@ -504,7 +503,7 @@ export const resolvers = {
         throw new ForbiddenError('Access to workspace members denied');
       }
     },
-    projects: async (workspace: any, _, context: any) => {
+    projects: async (workspace: any, _: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
       return ProjectService.getWorkspaceProjects(workspace.id, context.user.userId);
     }
@@ -534,7 +533,7 @@ export const resolvers = {
       } : null;
     },
 
-    members: async (project: any, _, context: any) => {
+    members: async (project: any, _: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
       
       try {
@@ -543,15 +542,9 @@ export const resolvers = {
         throw new ForbiddenError('Access to project members denied');
       }
     },
-    tasks: async (project: any, _, context: any) => {
+    tasks: async (project: any, _: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      
-      // We'll implement this in Step 4 with TaskService
-      const result = await db.query(
-        `SELECT * FROM tasks WHERE project_id = $1 ORDER BY created_at DESC`,
-        [project.id]
-      );
-      return result.rows;
+      return TaskService.getProjectTasks(project.id, context.user.userId);
     }
   },
 
@@ -583,7 +576,7 @@ export const resolvers = {
         WHERE ta.task_id = $1
       `, [task.id]);
 
-      return result.rows.map(row => ({
+      return result.rows.map((row: any) => ({
         ...row,
         globalStatus: row.global_status
       }));
