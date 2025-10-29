@@ -139,4 +139,39 @@ router.get('/health/ping', (req, res) => {
   });
 });
 
+// Add this route to src/rest/health.ts
+router.get('/health/db-status', async (req, res) => {
+  try {
+    const connectionStatus = db.getConnectionStatus();
+    const initStatus = db.getInitializationStatus();
+    
+    // Test if we can query users table (will fail if tables don't exist)
+    let tablesExist = false;
+    try {
+      await db.query('SELECT 1 FROM users LIMIT 1');
+      tablesExist = true;
+    } catch (error) {
+      tablesExist = false;
+    }
+
+    res.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      database: {
+        connected: connectionStatus.isConnected,
+        connectionAttempts: connectionStatus.attempts,
+        tablesInitialized: initStatus.isInitialized,
+        tablesExist: tablesExist
+      },
+      message: tablesExist ? 'Database is fully operational' : 'Tables are being created...'
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: 'unhealthy',
+      timestamp: new Date().toISOString(),
+      error: error instanceof Error ? error.message : 'Database error'
+    });
+  }
+});
+
 export default router;

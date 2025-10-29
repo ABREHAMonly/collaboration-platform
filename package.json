@@ -6,10 +6,10 @@
     "dev": "bun --watch src/server.ts",
     "build": "bun build src/server.ts --outdir dist --target node",
     "start": "bun dist/server.js",
-    "render:build": "bun run build && bun run db:setup && bun run db:seed",
+    "render:build": "bun run build",
     "test": "bun test",
-    "db:setup": "bun scripts/setup-db.ts",
-    "db:seed": "bun scripts/seed.ts"
+    "db:setup": "echo 'Auto-table creation is now built into the server startup'",
+    "db:seed": "echo 'Auto-seeding is now built into the server startup'"
   },
   "dependencies": {
     "express": "^4.18.2",
