@@ -1,4 +1,4 @@
--- scripts/seed.ts
+//scripts/seed.ts
 import { db } from '../src/database/client.js';
 import { hashPassword } from '../src/utils/authUtils.js';
 

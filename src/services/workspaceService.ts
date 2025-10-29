@@ -254,11 +254,11 @@ export class WorkspaceService {
 
   static async hasWorkspaceAccess(workspaceId: string, userId: string, minimumRole: string = 'VIEWER'): Promise<boolean> {
     try {
-      const roleHierarchy = {
-        'VIEWER': 1,
-        'MEMBER': 2,
-        'OWNER': 3
-      };
+      const roleHierarchy: Record<string, number> = {
+  'VIEWER': 1,
+  'MEMBER': 2,
+  'OWNER': 3
+};
 
       const result = await db.query(
         `SELECT role FROM workspace_members 

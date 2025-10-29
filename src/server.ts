@@ -10,7 +10,6 @@ import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import compression from 'compression';
 import mongoSanitize from 'express-mongo-sanitize';
-import xssSanitize from 'express-xss-sanitizer';
 import morgan from 'morgan';
 import { env } from './config/env.js';
 import { db } from './database/client.js';
@@ -23,6 +22,31 @@ import { authenticateToken } from './middleware/auth.js';
 import { securityHeaders, requestLogger } from './middleware/security.js';
 import { logger } from './services/logger.js';
 import { createWebSocketServer } from './graphql/subscription.js';
+
+// Custom XSS sanitizer (replace express-xss-sanitizer)
+const xssSanitizer = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (req.body) {
+    const sanitize = (obj: any): any => {
+      if (typeof obj === 'string') {
+        // Basic XSS prevention - remove script tags and dangerous attributes
+        return obj.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+                 .replace(/on\w+=/gi, '');
+      }
+      if (Array.isArray(obj)) {
+        return obj.map(sanitize);
+      }
+      if (obj && typeof obj === 'object') {
+        return Object.fromEntries(
+          Object.entries(obj).map(([key, value]) => [key, sanitize(value)])
+        );
+      }
+      return obj;
+    };
+    
+    req.body = sanitize(req.body);
+  }
+  next();
+};
 
 const app = express();
 const httpServer = createServer(app);
@@ -74,7 +98,7 @@ app.use(cookieParser());
 
 // Security middleware
 app.use(mongoSanitize());
-app.use(xssSanitize());
+app.use(xssSanitizer);
 
 // Logging
 app.use(morgan('combined', { 
@@ -101,9 +125,10 @@ const apolloServer = new ApolloServer({
     {
       requestDidStart: async () => ({
         didResolveOperation: async (requestContext) => {
+          const user = (requestContext.contextValue as any)?.user;
           logger.info('GraphQL Request', {
             operationName: requestContext.request.operationName,
-            user: requestContext.contextValue?.user?.userId,
+            user: user?.userId,
             environment: env.nodeEnv
           });
         },
@@ -118,9 +143,11 @@ await apolloServer.start();
 app.use('/graphql', 
   authenticateToken,
   expressMiddleware(apolloServer, {
-    context: async ({ req }) => {
+    context: async ({ req, res }) => {
       return {
         user: (req as any).user,
+        req,
+        res,
         db,
         logger,
         env
@@ -171,27 +198,19 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   logger.info(`❤️ Health: http://localhost:${PORT}/api/health`);
 });
 
-
 // Graceful shutdown
 const gracefulShutdown = async (signal: string) => {
   logger.info(`📡 ${signal} received, starting graceful shutdown`);
   
-  // Dispose WebSocket server
   serverCleanup.dispose();
-  
-  // Stop Apollo Server
   await apolloServer.stop();
-  
-  // Close database connections
   await db.disconnect();
   
-  // Close HTTP server
   httpServer.close(() => {
     logger.info('✅ HTTP server closed');
     process.exit(0);
   });
   
-  // Force shutdown after 10 seconds
   setTimeout(() => {
     logger.error('❌ Could not close connections in time, forcefully shutting down');
     process.exit(1);

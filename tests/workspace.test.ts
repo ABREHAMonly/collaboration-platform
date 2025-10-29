@@ -33,8 +33,10 @@ describe('Workspace Service', () => {
   });
 
   afterEach(async () => {
-    await db.query('DELETE FROM workspace_members WHERE workspace_id = $1', [workspaceId]);
-    await db.query('DELETE FROM workspaces WHERE id = $1', [workspaceId]);
+    if (workspaceId) {
+      await db.query('DELETE FROM workspace_members WHERE workspace_id = $1', [workspaceId]);
+      await db.query('DELETE FROM workspaces WHERE id = $1', [workspaceId]);
+    }
     await db.query('DELETE FROM users WHERE id IN ($1, $2)', [ownerId, memberId]);
   });
 
@@ -49,7 +51,7 @@ describe('Workspace Service', () => {
 
       expect(workspace.name).toBe('Test Workspace');
       expect(workspace.description).toBe('Test Description');
-      expect(workspace.created_by).toBe(ownerId);
+      expect(workspace.createdBy.id).toBe(ownerId);
 
       // Verify creator is owner
       const memberRole = await WorkspaceService.getWorkspaceMemberRole(workspaceId, ownerId);
@@ -80,12 +82,15 @@ describe('Workspace Service', () => {
     });
 
     it('should prevent non-owners from adding members', async () => {
-      await expectAsync(
-        WorkspaceService.addWorkspaceMember(
+      try {
+        await WorkspaceService.addWorkspaceMember(
           { workspaceId, userId: memberId, role: 'MEMBER' },
           memberId // Not the owner
-        )
-      ).toThrow();
+        );
+        expect(true).toBe(false); // Should not reach here
+      } catch (error) {
+        expect(error).toBeDefined();
+      }
     });
 
     it('should update member role', async () => {

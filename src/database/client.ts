@@ -72,21 +72,23 @@ class DatabaseClient {
   }
 
   public async query<T = any>(text: string, params?: any[]): Promise<{ rows: T[]; rowCount: number }> {
-    const start = Date.now();
-    try {
-      const result = await this.pool.query(text, params);
-      const duration = Date.now() - start;
-      
-      // Only log slow queries in production
-      if (duration > 1000 || env.isDevelopment) {
-        console.log(`📊 Query (${duration}ms):`, { 
-          text: text.substring(0, 100) + (text.length > 100 ? '...' : ''), 
-          params: params || [] 
-        });
-      }
-      
-      return result;
-    } catch (error) {
+  const start = Date.now();
+  try {
+    const result = await this.pool.query(text, params);
+    const duration = Date.now() - start;
+    
+    if (duration > 1000 || env.isDevelopment) {
+      console.log(`📊 Query (${duration}ms):`, { 
+        text: text.substring(0, 100) + (text.length > 100 ? '...' : ''), 
+        params: params || [] 
+      });
+    }
+    
+    return {
+      rows: result.rows,
+      rowCount: result.rowCount || 0 // Handle null rowCount
+    };
+  } catch (error) {
       console.error('❌ Query failed:', { 
         text: text.substring(0, 200),
         params: params || [],

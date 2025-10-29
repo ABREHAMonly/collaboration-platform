@@ -248,11 +248,11 @@ export class ProjectService {
 
   static async hasProjectAccess(projectId: string, userId: string, minimumRole: string = 'VIEWER'): Promise<boolean> {
     try {
-      const roleHierarchy = {
-        'VIEWER': 1,
-        'CONTRIBUTOR': 2,
-        'PROJECT_LEAD': 3
-      };
+      const roleHierarchy: Record<string, number> = {
+  'VIEWER': 1,
+  'MEMBER': 2,
+  'OWNER': 3
+};
 
       const result = await db.query(
         `SELECT role FROM project_members 
