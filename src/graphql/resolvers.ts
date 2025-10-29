@@ -1,7 +1,8 @@
 // src/graphql/resolvers.ts
-import { AuthenticationError, ForbiddenError, UserInputError } from 'apollo-server-express';
+// src/graphql/resolvers.ts - Fixed for Apollo Server 4
+import { GraphQLError } from 'graphql';
 import { db } from '../database/client.js';
-import { hashPassword, verifyPassword, generateResetToken, hashResetToken, generateTokens, setTokenCookies } from '../utils/authUtils.js';
+import { hashPassword, verifyPassword, generateResetToken, hashResetToken, generateTokens, setTokenCookies, TokenPayload } from '../utils/authUtils.js';
 import { AuthService } from '../services/authService.js';
 import { WorkspaceService } from '../services/workspaceService.js';
 import { ProjectService } from '../services/projectService.js';
@@ -12,6 +13,31 @@ import { logger } from '../services/logger.js';
 import { PubSub } from 'graphql-subscriptions';
 
 const pubsub = new PubSub();
+
+// Custom error classes for Apollo Server 4
+class AuthenticationError extends GraphQLError {
+  constructor(message: string) {
+    super(message, {
+      extensions: { code: 'UNAUTHENTICATED' }
+    });
+  }
+}
+
+class ForbiddenError extends GraphQLError {
+  constructor(message: string) {
+    super(message, {
+      extensions: { code: 'FORBIDDEN' }
+    });
+  }
+}
+
+class UserInputError extends GraphQLError {
+  constructor(message: string) {
+    super(message, {
+      extensions: { code: 'BAD_USER_INPUT' }
+    });
+  }
+}
 
 export const resolvers = {
   // Scalars
@@ -163,69 +189,91 @@ export const resolvers = {
     // AI Features
     summarizeTask: async (_: any, { input }: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      if (!context.env.enableAI) throw new Error('AI features are disabled');
+      if (!context.env.enableAI) throw new UserInputError('AI features are disabled');
       
       return AIService.summarizeTask(input.taskDescription);
+    },
+
+    // Additional queries
+    workspaceMembers: async (_: any, { workspaceId }: { workspaceId: string }, context: any) => {
+      if (!context.user) throw new AuthenticationError('Authentication required');
+      return WorkspaceService.getWorkspaceMembers(workspaceId, context.user.userId);
+    },
+
+    projectMembers: async (_: any, { projectId }: { projectId: string }, context: any) => {
+      if (!context.user) throw new AuthenticationError('Authentication required');
+      return ProjectService.getProjectMembers(projectId, context.user.userId);
+    },
+
+    myAssignedTasks: async (_: any, { status }: { status?: string }, context: any) => {
+      if (!context.user) throw new AuthenticationError('Authentication required');
+      return TaskService.getUserAssignedTasks(context.user.userId, status);
+    },
+
+    unreadNotificationCount: async (_: any, __: any, context: any) => {
+      if (!context.user) throw new AuthenticationError('Authentication required');
+      return NotificationService.getUnreadCount(context.user.userId);
     }
   },
 
   // Mutation Resolvers
   Mutation: {
     // Authentication
-    register: async (_: any, { input }: any, context: any) => {
-      try {
-        const { email, password } = input;
-        
-        // Check if user already exists
-        const existingUser = await db.query(
-          `SELECT id FROM users WHERE email = $1`,
-          [email.toLowerCase()]
-        );
+    // In the register mutation - fix the token payload
+register: async (_: any, { input }: any, context: any) => {
+  try {
+    const { email, password } = input;
+    
+    // Check if user already exists
+    const existingUser = await db.query(
+      `SELECT id FROM users WHERE email = $1`,
+      [email.toLowerCase()]
+    );
 
-        if (existingUser.rows.length > 0) {
-          throw new UserInputError('User already exists with this email');
-        }
+    if (existingUser.rows.length > 0) {
+      throw new UserInputError('User already exists with this email');
+    }
 
-        // Hash password and create user
-        const passwordHash = await hashPassword(password);
-        const result = await db.query(
-          `INSERT INTO users (email, password_hash, global_status) 
-           VALUES ($1, $2, 'ACTIVE') 
-           RETURNING id, email, global_status, created_at`,
-          [email.toLowerCase(), passwordHash]
-        );
+    // Hash password and create user
+    const passwordHash = await hashPassword(password);
+    const result = await db.query(
+      `INSERT INTO users (email, password_hash, global_status) 
+       VALUES ($1, $2, 'ACTIVE') 
+       RETURNING id, email, global_status, created_at`,
+      [email.toLowerCase(), passwordHash]
+    );
 
-        const user = result.rows[0];
-        
-        // Generate tokens
-        const tokenPayload = {
-          userId: user.id,
-          email: user.email,
-          globalStatus: user.global_status
-        };
+    const user = result.rows[0];
+    
+    // Generate tokens - fixed token payload
+    const tokenPayload: TokenPayload = {
+      userId: user.id,
+      email: user.email,
+      globalStatus: user.global_status // Add globalStatus
+    };
 
-        const tokens = generateTokens(tokenPayload);
-        setTokenCookies(context.res, tokens);
+    const tokens = generateTokens(tokenPayload);
+    setTokenCookies(context.res, tokens);
 
-        await logger.info('REGISTER_SUCCESS', { email }, user.id, context.req.ip);
+    await logger.info('REGISTER_SUCCESS', { email }, user.id, context.req.ip);
 
-        return {
-          ...tokens,
-          user: {
-            id: user.id,
-            email: user.email,
-            globalStatus: user.global_status
-          }
-        };
-
-      } catch (error) {
-        await logger.error('REGISTER_FAILED', { 
-          email: input.email, 
-          error: error instanceof Error ? error.message : 'Unknown error' 
-        }, undefined, context.req.ip);
-        throw error;
+    return {
+      ...tokens,
+      user: {
+        id: user.id,
+        email: user.email,
+        globalStatus: user.global_status
       }
-    },
+    };
+
+  } catch (error) {
+    await logger.error('REGISTER_FAILED', { 
+      email: input.email, 
+      error: error instanceof Error ? error.message : 'Unknown error' 
+    }, undefined, context.req.ip);
+    throw error;
+  }
+},
 
     forgotPassword: async (_: any, { input }: any, context: any) => {
       try {
@@ -244,9 +292,6 @@ export const resolvers = {
         const user = userResult.rows[0];
         const resetToken = generateResetToken();
         const resetTokenHash = hashResetToken(resetToken);
-        
-        // Store reset token (you might want a separate table for password resets)
-        // For now, we'll log it and in a real app, you'd send an email
         
         await logger.info('PASSWORD_RESET_REQUEST', { email }, user.id, context.req.ip);
         
@@ -450,10 +495,15 @@ export const resolvers = {
       return NotificationService.markAllAsRead(context.user.userId);
     },
 
+    deleteNotification: async (_: any, { notificationId }: any, context: any) => {
+      if (!context.user) throw new AuthenticationError('Authentication required');
+      return NotificationService.deleteNotification(notificationId, context.user.userId);
+    },
+
     // AI mutations
     generateTasksFromPrompt: async (_: any, { input }: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
-      if (!context.env.enableAI) throw new Error('AI features are disabled');
+      if (!context.env.enableAI) throw new UserInputError('AI features are disabled');
       
       return AIService.generateTasksFromPrompt(input, context.user.userId, context.req.ip, pubsub);
     }
@@ -503,13 +553,14 @@ export const resolvers = {
         throw new ForbiddenError('Access to workspace members denied');
       }
     },
+
     projects: async (workspace: any, _: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
       return ProjectService.getWorkspaceProjects(workspace.id, context.user.userId);
     }
   },
 
-   Project: {
+  Project: {
     workspace: async (project: any) => {
       const result = await db.query(
         `SELECT * FROM workspaces WHERE id = $1`,
@@ -520,7 +571,6 @@ export const resolvers = {
         createdBy: { id: result.rows[0].created_by }
       } : null;
     },
-
 
     createdBy: async (project: any) => {
       const result = await db.query(
@@ -542,6 +592,7 @@ export const resolvers = {
         throw new ForbiddenError('Access to project members denied');
       }
     },
+
     tasks: async (project: any, _: any, context: any) => {
       if (!context.user) throw new AuthenticationError('Authentication required');
       return TaskService.getProjectTasks(project.id, context.user.userId);

@@ -1,4 +1,5 @@
-// src/services/notificationService.ts
+// src/services/notificationService.ts - Fixed for Apollo Server 4
+// src/services/notificationService.ts - Fixed missing getUnreadCount method
 import { db } from '../database/client.js';
 import { logger } from './logger.js';
 
@@ -150,7 +151,7 @@ export class NotificationService {
     }
   }
 
-  static async getUnreadNotificationCount(userId: string): Promise<number> {
+  static async getUnreadCount(userId: string): Promise<number> {
     try {
       const result = await db.query(
         `SELECT COUNT(*) FROM notifications 
@@ -160,7 +161,7 @@ export class NotificationService {
 
       return parseInt(result.rows[0].count);
     } catch (error) {
-      logger.error('NotificationService - getUnreadNotificationCount error:', error);
+      logger.error('NotificationService - getUnreadCount error:', error);
       return 0;
     }
   }

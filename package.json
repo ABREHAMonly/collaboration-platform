@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun --watch src/server.ts",
-    "build": "bun build src/server.ts --outdir dist --target node --external pg --external ws",
+    "build": "bun build src/server.ts --outdir dist --target node --external pg --external ws --external @apollo/server --external graphql-ws --external ws --external jsonwebtoken --external bcryptjs --external winston --external pg-native",
     "start": "bun dist/server.js",
     "test": "bun test",
     "db:setup": "bun scripts/setup-db.ts",
@@ -13,6 +13,7 @@
   "dependencies": {
     "express": "^4.18.2",
     "@apollo/server": "^4.9.5",
+    "@apollo/server/express4": "^4.9.5",
     "graphql": "^16.8.1",
     "pg": "^8.11.3",
     "jsonwebtoken": "^9.0.2",

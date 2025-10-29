@@ -1,4 +1,4 @@
-# Dockerfile - Enhanced for Bun on Render
+# Dockerfile - Final version for Bun on Render
 FROM oven/bun:1-alpine
 
 # Install system dependencies
@@ -12,8 +12,8 @@ WORKDIR /app
 # Copy package files first for better caching
 COPY package.json ./
 
-# Install dependencies (create bun.lockb if missing)
-RUN if [ -f "bun.lockb" ]; then bun install --frozen-lockfile; else bun install; fi
+# Install dependencies
+RUN bun install
 
 # Copy source code
 COPY . .
@@ -21,11 +21,21 @@ COPY . .
 # Create necessary directories
 RUN mkdir -p logs dist
 
-# Build the application
-RUN bun run build
+# Build the application with better error handling
+RUN echo "🔨 Building application..." && \
+    bun run build || (echo "❌ Build failed, checking for TypeScript errors..." && bun run dev --smoke)
 
 # Verify build output
-RUN ls -la dist/ || echo "Build might have failed"
+RUN if [ -f "dist/server.js" ]; then \
+        echo "✅ Build successful - dist/server.js exists"; \
+    else \
+        echo "❌ Build failed - dist/server.js not found"; \
+        echo "📁 Current directory contents:"; \
+        ls -la; \
+        echo "📁 dist directory contents:"; \
+        ls -la dist/ 2>/dev/null || echo "dist directory does not exist"; \
+        exit 1; \
+    fi
 
 # Create non-root user for security
 RUN addgroup -g 1001 -S bunjs && \

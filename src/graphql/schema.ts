@@ -1,8 +1,9 @@
 // src/graphql/schema.ts
-import { gql } from 'apollo-server-express';
+// src/graphql/schema.ts - Fixed for Apollo Server 4
+// Remove apollo-server-express import and use template literals
 
 // Base types following your TypeScript patterns
-export const typeDefs = gql`
+export const typeDefs = `#graphql
   scalar DateTime
 
   type User {
@@ -32,6 +33,7 @@ export const typeDefs = gql`
     updatedAt: DateTime!
     createdBy: User!
     members: [WorkspaceMember!]!
+    projects: [Project!]!
   }
 
   type WorkspaceMember {

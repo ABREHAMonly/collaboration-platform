@@ -1,10 +1,24 @@
-// src/services/taskService.ts
+// src/services/taskService.ts - Fixed for Apollo Server 4
 import { db } from '../database/client.js';
 import { logger } from './logger.js';
-import { ForbiddenError, UserInputError } from 'apollo-server-express';
 import { ProjectService } from './projectService.js';
 import { NotificationService } from './notificationService.js';
 import { PubSub } from 'graphql-subscriptions';
+
+// Custom error classes for services
+class ForbiddenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ForbiddenError';
+  }
+}
+
+class UserInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UserInputError';
+  }
+}
 
 export class TaskService {
   static async createTask(input: any, userId: string, ipAddress?: string, pubsub?: PubSub): Promise<any> {

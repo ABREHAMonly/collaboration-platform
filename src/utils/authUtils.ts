@@ -1,4 +1,4 @@
-// src/utils/authUtils.ts
+// src/utils/authUtils.ts - Fixed TokenPayload interface
 import jwt from 'jsonwebtoken';
 import { Response } from 'express';
 import { env } from '../config/env.js';
@@ -8,7 +8,7 @@ import crypto from 'crypto';
 export interface TokenPayload {
   userId: string;
   email: string;
-  globalStatus: string;
+  globalStatus?: string; // Made optional
 }
 
 export interface AuthTokens {
