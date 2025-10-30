@@ -39,21 +39,30 @@ class UserInputError extends GraphQLError {
 
 export const resolvers = {
   // Scalars
-  DateTime: {
-    serialize: (value: any) => {
-      if (value instanceof Date) {
-        return value.toISOString();
-      }
-      return value;
-    },
-    parseValue: (value: any) => new Date(value),
-    parseLiteral: (ast: any) => {
-      if (ast.kind === 'StringValue') {
-        return new Date(ast.value);
-      }
-      return null;
+  // Update the DateTime scalar at the top of resolvers
+DateTime: {
+  serialize: (value: any) => {
+    if (value instanceof Date) {
+      return value.toISOString();
     }
+    if (typeof value === 'string') {
+      return value;
+    }
+    return null; // Allow null for optional fields
   },
+  parseValue: (value: any) => {
+    if (value) {
+      return new Date(value);
+    }
+    return null;
+  },
+  parseLiteral: (ast: any) => {
+    if (ast.kind === 'StringValue' && ast.value) {
+      return new Date(ast.value);
+    }
+    return null;
+  }
+},
 
   JSON: {
     serialize: (value: any) => value,
@@ -123,17 +132,21 @@ export const resolvers = {
     }
   },
 
- myWorkspaces: async (_: any, __: any, context: any) => {
-    if (!context.user) throw new AuthenticationError('Authentication required');
-    
-    try {
-      const workspaces = await WorkspaceService.getUserWorkspaces(context.user.userId);
-      return workspaces || [];
-    } catch (error) {
-      console.error('MyWorkspaces query error:', error);
-      return []; // Return empty array instead of throwing
-    }
-  },
+
+
+// Fix the myWorkspaces resolver to handle null dates
+myWorkspaces: async (_: any, __: any, context: any) => {
+  if (!context.user) throw new AuthenticationError('Authentication required');
+  
+  try {
+    const workspaces = await WorkspaceService.getUserWorkspaces(context.user.userId);
+    return workspaces || [];
+  } catch (error) {
+    console.error('MyWorkspaces query error:', error);
+    // Return empty array instead of throwing to prevent frontend crashes
+    return [];
+  }
+},
 
   getAllWorkspaces: async (_: any, __: any, context: any) => {
     if (!context.user) throw new AuthenticationError('Authentication required');

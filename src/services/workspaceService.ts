@@ -1,4 +1,4 @@
-// src/services/workspaceService.ts - Fixed for Apollo Server 4
+// src/services/workspaceService.ts - COMPLETE AND FIXED
 import { db } from '../database/client.js';
 import { logger } from './logger.js';
 
@@ -22,6 +22,10 @@ export class WorkspaceService {
     try {
       const { name, description } = input;
 
+      if (!name || name.trim().length === 0) {
+        throw new UserInputError('Workspace name is required');
+      }
+
       // Start transaction
       const result = await db.transaction(async (client) => {
         // Create workspace
@@ -29,7 +33,7 @@ export class WorkspaceService {
           `INSERT INTO workspaces (name, description, created_by) 
            VALUES ($1, $2, $3) 
            RETURNING *`,
-          [name, description, userId]
+          [name.trim(), description?.trim() || null, userId]
         );
 
         const workspace = workspaceResult.rows[0];
@@ -44,16 +48,30 @@ export class WorkspaceService {
         return workspace;
       });
 
-      await logger.info('WORKSPACE_CREATED', { workspaceId: result.id }, userId, ipAddress);
+      await logger.info('WORKSPACE_CREATED', { workspaceId: result.id, name }, userId, ipAddress);
 
       return {
-        ...result,
+        id: result.id,
+        name: result.name,
+        description: result.description,
+        createdAt: result.created_at,
+        updatedAt: result.updated_at,
         createdBy: { id: userId }
       };
 
     } catch (error) {
-      logger.error('WorkspaceService - createWorkspace error:', error);
-      throw error;
+      console.error('WorkspaceService - createWorkspace error:', error);
+      
+      if (error instanceof UserInputError) {
+        throw error;
+      }
+      
+      // Handle database errors
+      if (error instanceof Error && error.message.includes('unique constraint')) {
+        throw new UserInputError('A workspace with this name already exists');
+      }
+      
+      throw new Error('Failed to create workspace');
     }
   }
 
@@ -71,39 +89,71 @@ export class WorkspaceService {
       }
 
       const workspaceResult = await db.query(
-        `SELECT * FROM workspaces WHERE id = $1`,
+        `SELECT w.*, u.email as created_by_email
+         FROM workspaces w
+         LEFT JOIN users u ON w.created_by = u.id
+         WHERE w.id = $1`,
         [workspaceId]
       );
 
-      return workspaceResult.rows[0] ? {
-        ...workspaceResult.rows[0],
-        createdBy: { id: workspaceResult.rows[0].created_by }
-      } : null;
+      if (workspaceResult.rows.length === 0) {
+        return null;
+      }
+
+      const workspace = workspaceResult.rows[0];
+      
+      return {
+        id: workspace.id,
+        name: workspace.name,
+        description: workspace.description,
+        createdAt: workspace.created_at,
+        updatedAt: workspace.updated_at,
+        createdBy: { 
+          id: workspace.created_by,
+          email: workspace.created_by_email
+        }
+      };
 
     } catch (error) {
-      logger.error('WorkspaceService - getWorkspace error:', error);
-      throw error;
+      console.error('WorkspaceService - getWorkspace error:', error);
+      throw new Error('Failed to fetch workspace');
     }
   }
 
   static async getUserWorkspaces(userId: string): Promise<any[]> {
     try {
       const result = await db.query(`
-        SELECT w.*, wm.role 
+        SELECT 
+          w.*,
+          u.email as created_by_email,
+          COUNT(DISTINCT wm.id) as member_count,
+          COUNT(DISTINCT p.id) as project_count
         FROM workspaces w 
         JOIN workspace_members wm ON w.id = wm.workspace_id 
+        LEFT JOIN users u ON w.created_by = u.id
+        LEFT JOIN projects p ON w.id = p.workspace_id
         WHERE wm.user_id = $1 
+        GROUP BY w.id, u.email
         ORDER BY w.created_at DESC
       `, [userId]);
 
       return result.rows.map(row => ({
-        ...row,
-        createdBy: { id: row.created_by }
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        createdBy: { 
+          id: row.created_by,
+          email: row.created_by_email
+        },
+        memberCount: parseInt(row.member_count),
+        projectCount: parseInt(row.project_count)
       }));
 
     } catch (error) {
-      logger.error('WorkspaceService - getUserWorkspaces error:', error);
-      throw error;
+      console.error('WorkspaceService - getUserWorkspaces error:', error);
+      throw new Error('Failed to fetch workspaces');
     }
   }
 
@@ -163,8 +213,13 @@ export class WorkspaceService {
       };
 
     } catch (error) {
-      logger.error('WorkspaceService - addWorkspaceMember error:', error);
-      throw error;
+      console.error('WorkspaceService - addWorkspaceMember error:', error);
+      
+      if (error instanceof ForbiddenError || error instanceof UserInputError) {
+        throw error;
+      }
+      
+      throw new Error('Failed to add workspace member');
     }
   }
 
@@ -205,8 +260,13 @@ export class WorkspaceService {
       return true;
 
     } catch (error) {
-      logger.error('WorkspaceService - removeWorkspaceMember error:', error);
-      throw error;
+      console.error('WorkspaceService - removeWorkspaceMember error:', error);
+      
+      if (error instanceof ForbiddenError || error instanceof UserInputError) {
+        throw error;
+      }
+      
+      throw new Error('Failed to remove workspace member');
     }
   }
 
@@ -261,8 +321,13 @@ export class WorkspaceService {
       };
 
     } catch (error) {
-      logger.error('WorkspaceService - updateWorkspaceMemberRole error:', error);
-      throw error;
+      console.error('WorkspaceService - updateWorkspaceMemberRole error:', error);
+      
+      if (error instanceof ForbiddenError || error instanceof UserInputError) {
+        throw error;
+      }
+      
+      throw new Error('Failed to update member role');
     }
   }
 
@@ -288,7 +353,7 @@ export class WorkspaceService {
       return roleHierarchy[userRole] >= roleHierarchy[minimumRole];
 
     } catch (error) {
-      logger.error('WorkspaceService - hasWorkspaceAccess error:', error);
+      console.error('WorkspaceService - hasWorkspaceAccess error:', error);
       return false;
     }
   }
@@ -304,12 +369,11 @@ export class WorkspaceService {
       return result.rows.length > 0 ? result.rows[0].role : null;
 
     } catch (error) {
-      logger.error('WorkspaceService - getWorkspaceMemberRole error:', error);
+      console.error('WorkspaceService - getWorkspaceMemberRole error:', error);
       return null;
     }
   }
 
-  // Get all workspace members with their details
   static async getWorkspaceMembers(workspaceId: string, requesterId: string): Promise<any[]> {
     try {
       // Verify requester has access to workspace
@@ -319,7 +383,11 @@ export class WorkspaceService {
       }
 
       const result = await db.query(`
-        SELECT wm.*, u.email, u.global_status, u.created_at as user_created
+        SELECT 
+          wm.*, 
+          u.email, 
+          u.global_status, 
+          u.created_at as user_created
         FROM workspace_members wm 
         JOIN users u ON wm.user_id = u.id 
         WHERE wm.workspace_id = $1 
@@ -345,8 +413,47 @@ export class WorkspaceService {
       }));
 
     } catch (error) {
-      logger.error('WorkspaceService - getWorkspaceMembers error:', error);
-      throw error;
+      console.error('WorkspaceService - getWorkspaceMembers error:', error);
+      
+      if (error instanceof ForbiddenError) {
+        throw error;
+      }
+      
+      throw new Error('Failed to fetch workspace members');
+    }
+  }
+
+  // Get workspace statistics
+  static async getWorkspaceStats(workspaceId: string, userId: string): Promise<any> {
+    try {
+      const hasAccess = await this.hasWorkspaceAccess(workspaceId, userId, 'VIEWER');
+      if (!hasAccess) {
+        throw new ForbiddenError('Access to workspace denied');
+      }
+
+      const statsResult = await db.query(`
+        SELECT 
+          COUNT(DISTINCT wm.user_id) as member_count,
+          COUNT(DISTINCT p.id) as project_count,
+          COUNT(DISTINCT t.id) as task_count,
+          COUNT(DISTINCT CASE WHEN t.status = 'DONE' THEN t.id END) as completed_tasks
+        FROM workspaces w
+        LEFT JOIN workspace_members wm ON w.id = wm.workspace_id
+        LEFT JOIN projects p ON w.id = p.workspace_id
+        LEFT JOIN tasks t ON p.id = t.project_id
+        WHERE w.id = $1
+      `, [workspaceId]);
+
+      return statsResult.rows[0] || {
+        member_count: 0,
+        project_count: 0,
+        task_count: 0,
+        completed_tasks: 0
+      };
+
+    } catch (error) {
+      console.error('WorkspaceService - getWorkspaceStats error:', error);
+      throw new Error('Failed to fetch workspace statistics');
     }
   }
 }

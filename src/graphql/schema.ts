@@ -1,36 +1,23 @@
 // src/graphql/schema.ts
-// src/graphql/schema.ts - Fixed for Apollo Server 4
-// Remove apollo-server-express import and use template literals
-
-// Base types following your TypeScript patterns
 export const typeDefs = `#graphql
   scalar DateTime
+  scalar JSON
 
   type User {
     id: ID!
     email: String!
     globalStatus: GlobalStatus!
-    createdAt: DateTime!
-    updatedAt: DateTime!
+    createdAt: DateTime
+    updatedAt: DateTime
     lastLogin: DateTime
-  }
-
-  type UserDevice {
-    id: ID!
-    ipAddress: String
-    userAgent: String
-    deviceInfo: JSON
-    loginTime: DateTime!
-    isRevoked: Boolean!
-    lastActive: DateTime!
   }
 
   type Workspace {
     id: ID!
     name: String!
     description: String
-    createdAt: DateTime!
-    updatedAt: DateTime!
+    createdAt: DateTime
+    updatedAt: DateTime
     createdBy: User!
     members: [WorkspaceMember!]!
     projects: [Project!]!
@@ -40,7 +27,7 @@ export const typeDefs = `#graphql
     id: ID!
     user: User!
     role: WorkspaceRole!
-    joinedAt: DateTime!
+    joinedAt: DateTime
   }
 
   type Project {
@@ -48,8 +35,8 @@ export const typeDefs = `#graphql
     name: String!
     description: String
     workspace: Workspace!
-    createdAt: DateTime!
-    updatedAt: DateTime!
+    createdAt: DateTime
+    updatedAt: DateTime
     createdBy: User!
     members: [ProjectMember!]!
     tasks: [Task!]!
@@ -59,7 +46,7 @@ export const typeDefs = `#graphql
     id: ID!
     user: User!
     role: ProjectRole!
-    joinedAt: DateTime!
+    joinedAt: DateTime
   }
 
   type Task {
@@ -71,8 +58,8 @@ export const typeDefs = `#graphql
     createdBy: User!
     assignedTo: [User!]!
     dueDate: DateTime
-    createdAt: DateTime!
-    updatedAt: DateTime!
+    createdAt: DateTime
+    updatedAt: DateTime
   }
 
   type Notification {
@@ -82,7 +69,7 @@ export const typeDefs = `#graphql
     status: NotificationStatus!
     relatedEntityId: ID
     entityType: String
-    createdAt: DateTime!
+    createdAt: DateTime
     readAt: DateTime
   }
 
@@ -103,7 +90,7 @@ export const typeDefs = `#graphql
     message: String
   }
 
-  # Enums following your TypeScript enum patterns
+  # Enums - FIXED: Remove trailing commas
   enum GlobalStatus {
     ACTIVE
     BANNED
@@ -154,7 +141,7 @@ export const typeDefs = `#graphql
   input AddWorkspaceMemberInput {
     workspaceId: ID!
     userId: ID!
-    role: WorkspaceRole = MEMBER
+    role: WorkspaceRole
   }
 
   input UpdateWorkspaceMemberRoleInput {
@@ -236,7 +223,7 @@ export const typeDefs = `#graphql
       userId: ID
       startDate: DateTime
       endDate: DateTime
-      limit: Int = 50
+      limit: Int
     ): [AuditLog!]!
 
     # Projects
@@ -246,9 +233,11 @@ export const typeDefs = `#graphql
     # Tasks
     task(id: ID!): Task
     projectTasks(projectId: ID!): [Task!]!
+    myAssignedTasks(status: TaskStatus): [Task!]!
 
     # Notifications
     myNotifications(status: NotificationStatus): [Notification!]!
+    unreadNotificationCount: Int!
 
     # AI Features
     summarizeTask(input: AISummarizeInput!): String!
@@ -258,17 +247,11 @@ export const typeDefs = `#graphql
 
     # Project members  
     projectMembers(projectId: ID!): [ProjectMember!]!
-
-    # Get tasks assigned to the current user
-    myAssignedTasks(status: TaskStatus): [Task!]!
-
-    # Get unread notification count
-    unreadNotificationCount: Int!
   }
 
   # Mutations
   type Mutation {
-    # Authentication (GraphQL)
+    # Authentication
     register(input: RegisterInput!): AuthPayload!
     forgotPassword(input: ForgotPasswordInput!): Boolean!
     updatePassword(input: UpdatePasswordInput!): Boolean!
@@ -297,19 +280,14 @@ export const typeDefs = `#graphql
     # Notification mutations
     markNotificationAsRead(notificationId: ID!): Notification!
     markAllNotificationsAsRead: Boolean!
+    deleteNotification(notificationId: ID!): Boolean!
 
     # AI mutations
     generateTasksFromPrompt(input: AIGenerateTasksInput!): [Task!]!
-
-    # Delete a specific notification
-    deleteNotification(notificationId: ID!): Boolean!
   }
 
   # Subscriptions
   type Subscription {
     taskStatusUpdated(workspaceId: ID!): Task!
   }
-
-  # Scalars
-  scalar JSON
 `;
