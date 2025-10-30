@@ -17,19 +17,23 @@ class DatabaseClient {
     const databaseUrl = new URL(env.databaseUrl);
     
     this.pool = new Pool({
-      connectionString: env.databaseUrl,
-      max: env.isProduction ? 20 : 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: env.isProduction ? 10000 : 5000,
-      ssl: env.ssl,
-      
-      // Additional options from URL
-      host: databaseUrl.hostname,
-      port: parseInt(databaseUrl.port) || 5432,
-      database: databaseUrl.pathname.slice(1),
-      user: databaseUrl.username,
-      password: databaseUrl.password,
-    });
+  connectionString: env.databaseUrl,
+  max: env.isProduction ? 20 : 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: env.isProduction ? 10000 : 5000,
+  ssl: env.ssl,
+  
+  // Enhanced connection settings
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10000,
+  
+  // Additional options from URL
+  host: databaseUrl.hostname,
+  port: parseInt(databaseUrl.port) || 5432,
+  database: databaseUrl.pathname.slice(1),
+  user: databaseUrl.username,
+  password: databaseUrl.password,
+});
 
     this.setupEventListeners();
   }
@@ -58,6 +62,21 @@ class DatabaseClient {
       this.isConnected = false;
     });
   }
+
+  // Add this method to handle reconnection:
+private async handleReconnection(): Promise<void> {
+  if (this.isConnected) return;
+  
+  console.log('🔄 Attempting to reestablish database connection...');
+  this.isConnected = false;
+  this.connectionAttempts = 0;
+  
+  try {
+    await this.connect();
+  } catch (error) {
+    console.error('❌ Reconnection failed:', error);
+  }
+}
 
   // NEW: Auto-create tables method
   private async initializeTables(): Promise<void> {
@@ -384,50 +403,61 @@ class DatabaseClient {
     return this.pool;
   }
 
-  public async query<T = any>(text: string, params?: any[]): Promise<{ rows: T[]; rowCount: number }> {
-    const start = Date.now();
-    
-    // Ensure we're connected
-    if (!this.isConnected) {
-      await this.connect();
-    }
-
-    try {
-      const result = await this.pool.query(text, params);
-      const duration = Date.now() - start;
-      
-      // Log slow queries or all queries in development
-      if (duration > 1000 || env.isDevelopment) {
-        console.log(`📊 Query (${duration}ms):`, { 
-          text: text.substring(0, 100) + (text.length > 100 ? '...' : ''), 
-          params: params || [],
-          rowCount: result.rowCount
-        });
-      }
-      
-      return {
-        rows: result.rows as T[],
-        rowCount: result.rowCount || 0
-      };
-    } catch (error) {
-      console.error('❌ Query failed:', { 
-        text: text.substring(0, 200),
-        params: params || [],
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-      
-      // Mark as disconnected on certain errors
-      if (error instanceof Error && (
-        error.message.includes('connection') || 
-        error.message.includes('ECONNREFUSED') ||
-        error.message.includes('getaddrinfo')
-      )) {
-        this.isConnected = false;
-      }
-      
-      throw error;
-    }
+ // the query method to handle disconnections:
+public async query<T = any>(text: string, params?: any[]): Promise<{ rows: T[]; rowCount: number }> {
+  const start = Date.now();
+  
+  // Ensure we're connected - with reconnection logic
+  if (!this.isConnected) {
+    await this.handleReconnection();
   }
+
+  try {
+    const result = await this.pool.query(text, params);
+    const duration = Date.now() - start;
+    
+    // Log slow queries
+    if (duration > 1000) {
+      console.log(`🐌 Slow Query (${duration}ms):`, { 
+        text: text.substring(0, 100) + (text.length > 100 ? '...' : ''), 
+        params: params ? params.map(p => typeof p === 'string' ? p.substring(0, 50) : p) : []
+      });
+    }
+    
+    return {
+      rows: result.rows as T[],
+      rowCount: result.rowCount || 0
+    };
+  } catch (error) {
+    console.error('❌ Query failed:', { 
+      text: text.substring(0, 200),
+      params: params || [],
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+    
+    // Mark as disconnected and attempt reconnect
+    this.isConnected = false;
+    
+    // For connection errors, try to reconnect once
+    if (error instanceof Error && (
+      error.message.includes('connection') || 
+      error.message.includes('ECONNREFUSED') ||
+      error.message.includes('getaddrinfo') ||
+      error.message.includes('terminated')
+    )) {
+      console.log('🔄 Connection error detected, attempting reconnect...');
+      await this.handleReconnection();
+      
+      // Retry the query once after reconnection
+      if (this.isConnected) {
+        console.log('🔄 Retrying query after reconnection...');
+        return this.query(text, params);
+      }
+    }
+    
+    throw error;
+  }
+}
 
   public async transaction<T>(callback: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();

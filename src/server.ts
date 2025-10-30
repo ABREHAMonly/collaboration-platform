@@ -21,6 +21,7 @@ import { authenticateToken } from './middleware/auth.js';
 import { securityHeaders, requestLogger } from './middleware/security.js';
 import { logger } from './services/logger.js';
 import { createWebSocketServer } from './graphql/subscription.js';
+import diagnosticsRoutes from './rest/diagnostics.js';
 
 // Custom XSS sanitizer
 const xssSanitizer = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -154,6 +155,7 @@ app.use(morgan('combined', {
 }));
 app.use(requestLogger);
 
+
 // Health checks (no authentication required)
 app.use('/api/health', healthRoutes);
 
@@ -254,6 +256,9 @@ async function startServer() {
         }
       });
     });
+
+    app.use('/api/diagnostics', diagnosticsRoutes);
+
 
     // Start server
     const PORT = env.port;

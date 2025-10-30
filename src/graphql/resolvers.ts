@@ -106,25 +106,38 @@ export const resolvers = {
 
     // Workspaces
     workspace: async (_: any, { id }: { id: string }, context: any) => {
-      if (!context.user) throw new AuthenticationError('Authentication required');
-      
+    if (!context.user) throw new AuthenticationError('Authentication required');
+    
+    try {
       const workspace = await WorkspaceService.getWorkspace(id, context.user.userId);
-      if (!workspace) throw new ForbiddenError('Workspace not found or access denied');
-      
-      return workspace;
-    },
-
-    myWorkspaces: async (_: any, __: any, context: any) => {
-      if (!context.user) throw new AuthenticationError('Authentication required');
-      return WorkspaceService.getUserWorkspaces(context.user.userId);
-    },
-
-    // Admin only
-    getAllWorkspaces: async (_: any, __: any, context: any) => {
-      if (!context.user) {
-        throw new AuthenticationError('Authentication required');
+      if (!workspace) {
+        throw new UserInputError('Workspace not found or access denied');
       }
+      return workspace;
+    } catch (error) {
+      if (error instanceof ForbiddenError || error instanceof UserInputError) {
+        throw error;
+      }
+      console.error('Workspace query error:', error);
+      throw new Error('Failed to fetch workspace');
+    }
+  },
 
+  myWorkspaces: async (_: any, __: any, context: any) => {
+    if (!context.user) throw new AuthenticationError('Authentication required');
+    
+    try {
+      return await WorkspaceService.getUserWorkspaces(context.user.userId);
+    } catch (error) {
+      console.error('MyWorkspaces query error:', error);
+      throw new Error('Failed to fetch workspaces');
+    }
+  },
+
+  getAllWorkspaces: async (_: any, __: any, context: any) => {
+    if (!context.user) throw new AuthenticationError('Authentication required');
+
+    try {
       // Check if user is admin
       const userResult = await db.query(
         `SELECT global_status FROM users WHERE id = $1`,
@@ -144,10 +157,20 @@ export const resolvers = {
 
       return result.rows.map(row => ({
         ...row,
-        createdBy: { id: row.created_by, email: row.created_by_email }
+        createdBy: { 
+          id: row.created_by, 
+          email: row.created_by_email 
+        },
+        // Ensure members are included
+        members: []
       }));
-    },
+    } catch (error) {
+      console.error('GetAllWorkspaces query error:', error);
+      throw error;
+    }
+  },
 
+  // Audit Logs
     getAuditLogs: async (_: any, { level, userId, startDate, endDate, limit = 50 }: any, context: any) => {
       if (!context.user) {
         throw new AuthenticationError('Authentication required');

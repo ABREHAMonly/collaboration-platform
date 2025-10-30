@@ -21,7 +21,10 @@ if (process.env.NODE_ENV === 'production') {
     || process.env.DATABASE_CONNECTION_STRING 
     || process.env.POSTGRES_URL 
     || process.env.NEON_DATABASE_URL
-    || process.env.DATABASE_URL; // Keep original if exists
+    || process.env.DATABASE_URL;
+
+  // Ensure SSL in production
+  process.env.DB_SSL = 'true';
 }
 
 // Required environment variables
@@ -77,19 +80,27 @@ export const env = {
   isDevelopment: process.env.NODE_ENV === 'development' || !process.env.NODE_ENV,
   isTest: process.env.NODE_ENV === 'test',
   
-  // CORS configuration
+// Enhanced SSL configuration
+  ssl: process.env.NODE_ENV === 'production' ? {
+    rejectUnauthorized: false,
+    ca: process.env.DB_SSL_CERT
+  } : false,
+
+// Enhanced CORS for production
   corsOrigins: process.env.CORS_ORIGINS 
     ? process.env.CORS_ORIGINS.split(',') 
     : (process.env.NODE_ENV === 'production' 
-        ? ['https://yourapp.vercel.app', 'https://collaboration-platform-9ngo.onrender.com'] 
+        ? [
+            'https://collaboration-platform-frontend.vercel.app',
+            'https://collaboration-platform.vercel.app',
+            'https://yourapp.vercel.app'
+          ] 
         : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:4000']),
-        
-  // SSL configuration
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-  
-  // JWT Expiry
+
+        // JWT Expiry
   jwtAccessExpiry: process.env.JWT_ACCESS_EXPIRY || '15m',
   jwtRefreshExpiry: process.env.JWT_REFRESH_EXPIRY || '7d'
+  
 } as const;
 
 // Log environment info (without secrets)
