@@ -67,9 +67,14 @@ if (env.isProduction) {
 
 // CORS configuration
 app.use(cors({
-  origin: env.corsOrigins,
+  origin: [
+    'https://collaboration-platform-frontend.vercel.app',
+    'http://localhost:3000',
+    'http://localhost:5173'
+  ],
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token']
 }));
 
 // Rate limiting
@@ -159,6 +164,15 @@ app.use(requestLogger);
 // Health checks (no authentication required)
 app.use('/api/health', healthRoutes);
 
+app.get('/api/test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Backend is working!',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV
+  });
+});
+
 // API Documentation
 app.use('/api/docs', docsRoutes);
 
@@ -218,6 +232,7 @@ async function startServer() {
         }
       })
     );
+    app.use('/api/diagnostics', diagnosticsRoutes);
 
     // Global error handler
     app.use((error: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -257,7 +272,7 @@ async function startServer() {
       });
     });
 
-    app.use('/api/diagnostics', diagnosticsRoutes);
+
 
 
     // Start server

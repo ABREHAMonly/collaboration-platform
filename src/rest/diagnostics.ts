@@ -4,7 +4,7 @@ import { logger } from '../services/logger.js';
 
 const router = Router();
 
-router.get('/', async (req, res) => {
+router.get('/diagnostics', async (req, res) => {
   try {
     const diagnostics = {
   timestamp: new Date().toISOString(),

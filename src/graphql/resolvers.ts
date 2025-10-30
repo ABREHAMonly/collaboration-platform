@@ -123,14 +123,15 @@ export const resolvers = {
     }
   },
 
-  myWorkspaces: async (_: any, __: any, context: any) => {
+ myWorkspaces: async (_: any, __: any, context: any) => {
     if (!context.user) throw new AuthenticationError('Authentication required');
     
     try {
-      return await WorkspaceService.getUserWorkspaces(context.user.userId);
+      const workspaces = await WorkspaceService.getUserWorkspaces(context.user.userId);
+      return workspaces || [];
     } catch (error) {
       console.error('MyWorkspaces query error:', error);
-      throw new Error('Failed to fetch workspaces');
+      return []; // Return empty array instead of throwing
     }
   },
 
