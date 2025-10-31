@@ -7,12 +7,22 @@ import { dirname } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Load environment variables based on NODE_ENV
+// Add this at the very top of your env.ts file
+console.log('🔍 DEBUG - Raw NODE_ENV:', process.env.NODE_ENV);
+console.log('🔍 DEBUG - All env vars:', Object.keys(process.env).filter(key => key.includes('NODE')))
+
+// Load environment variables FIRST, before any logic
+config({ path: join(process.cwd(), '.env') });
+
+// Then check NODE_ENV and load specific file
 const envFile = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.development';
 config({ path: join(process.cwd(), envFile) });
 
 // Fallback to default .env if specific file doesn't exist
 config({ path: join(process.cwd(), '.env') });
+console.log('🔍 Current NODE_ENV:', process.env.NODE_ENV);
+console.log('🔍 Loaded environment files in order: .env, then', envFile);
+
 
 // Cloud environment variable mapping
 if (process.env.NODE_ENV === 'production') {
