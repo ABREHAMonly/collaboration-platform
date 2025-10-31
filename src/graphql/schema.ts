@@ -90,7 +90,7 @@ export const typeDefs = `#graphql
     message: String
   }
 
-  # Enums - FIXED: Remove trailing commas
+  # Enums
   enum GlobalStatus {
     ACTIVE
     BANNED
@@ -128,6 +128,11 @@ export const typeDefs = `#graphql
   }
 
   # Input types
+  input LoginInput {
+    email: String!
+    password: String!
+  }
+
   input RegisterInput {
     email: String!
     password: String!
@@ -252,6 +257,7 @@ export const typeDefs = `#graphql
   # Mutations
   type Mutation {
     # Authentication
+    login(input: LoginInput!): AuthPayload!
     register(input: RegisterInput!): AuthPayload!
     forgotPassword(input: ForgotPasswordInput!): Boolean!
     updatePassword(input: UpdatePasswordInput!): Boolean!

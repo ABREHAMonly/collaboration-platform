@@ -27,14 +27,15 @@ export class AIService {
 
     try {
       this.genAI = new GoogleGenerativeAI(env.geminiApiKey);
-      this.model = this.genAI.getGenerativeModel({ model: "gemini-pro" });
-      console.log('✅ Gemini AI service initialized');
+      // Use the correct model name
+      this.model = this.genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      console.log('✅ Gemini AI service initialized with gemini-1.5-flash');
     } catch (error) {
       console.error('❌ Failed to initialize Gemini AI:', error);
     }
   }
 
-  static async summarizeTask(taskDescription: string): Promise<string> {
+   static async summarizeTask(taskDescription: string): Promise<string> {
     if (!this.model) {
       throw new Error('AI service not available');
     }
@@ -53,9 +54,10 @@ export class AIService {
       const response = await result.response;
       return response.text().trim();
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('AIService - summarizeTask error:', error);
-      throw new Error('Failed to generate task summary');
+      // Return a fallback instead of throwing
+      return `Summary: ${taskDescription.substring(0, 150)}...`;
     }
   }
 

@@ -9,6 +9,7 @@ import { NotificationService } from '../services/notificationService.js';
 import { AIService } from '../services/aiService.js';
 import { logger } from '../services/logger.js';
 import { PubSub } from 'graphql-subscriptions';
+import { AuthService } from '@/services/authService.js';
 
 const pubsub = new PubSub();
 
@@ -294,61 +295,97 @@ myWorkspaces: async (_: any, __: any, context: any) => {
 
   // Mutation Resolvers
   Mutation: {
-    // Authentication
-    register: async (_: any, { input }: any, context: any) => {
-      try {
-        const { email, password } = input;
-        
-        // Check if user already exists
-        const existingUser = await db.query(
-          `SELECT id FROM users WHERE email = $1`,
-          [email.toLowerCase()]
-        );
+     // Authentication
+  login: async (_: any, { input }: any, context: any) => {
+    try {
+      const { email, password } = input;
+      
+      // Use your better AuthService
+      const user = await AuthService.validateUserCredentials(email, password);
+      
+      if (!user) {
+        throw new AuthenticationError('Invalid email or password');
+      }
 
-        if (existingUser.rows.length > 0) {
-          throw new UserInputError('User already exists with this email');
-        }
+      // Update last login
+      await AuthService.updateLastLogin(user.id);
 
-        // Hash password and create user
-        const passwordHash = await hashPassword(password);
-        const result = await db.query(
-          `INSERT INTO users (email, password_hash, global_status) 
-           VALUES ($1, $2, 'ACTIVE') 
-           RETURNING id, email, global_status, created_at`,
-          [email.toLowerCase(), passwordHash]
-        );
+      // Generate tokens
+      const tokenPayload: TokenPayload = {
+        userId: user.id,
+        email: user.email,
+        globalStatus: user.global_status // Use the field from your service
+      };
 
-        const user = result.rows[0];
-        
-        // Generate tokens
-        const tokenPayload: TokenPayload = {
-          userId: user.id,
+      const tokens = generateTokens(tokenPayload);
+      
+      // Create user device for session management
+      const refreshTokenHash = await hashPassword(tokens.refreshToken); // You might want to hash the refresh token
+      await AuthService.createUserDevice(
+        user.id,
+        refreshTokenHash,
+        context.req?.ip,
+        context.req?.get('User-Agent')
+      );
+
+      setTokenCookies(context.res, tokens);
+
+      await logger.info('LOGIN_SUCCESS', { email }, user.id, context.req?.ip);
+
+      return {
+        ...tokens,
+        user: {
+          id: user.id,
           email: user.email,
           globalStatus: user.global_status
-        };
+        }
+      };
 
-        const tokens = generateTokens(tokenPayload);
-        setTokenCookies(context.res, tokens);
+    } catch (error) {
+      await logger.error('LOGIN_FAILED', { 
+        email: input.email, 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }, undefined, context.req?.ip);
+      throw error;
+    }
+  },
 
-        await logger.info('REGISTER_SUCCESS', { email }, user.id, context.req?.ip);
+  register: async (_: any, { input }: any, context: any) => {
+    try {
+      const { email, password } = input;
+      
+      // Use your better register method
+      const user = await AuthService.registerUser(email, password);
 
-        return {
-          ...tokens,
-          user: {
-            id: user.id,
-            email: user.email,
-            globalStatus: user.global_status
-          }
-        };
+      // Generate tokens
+      const tokenPayload: TokenPayload = {
+        userId: user.id,
+        email: user.email,
+        globalStatus: user.globalStatus
+      };
 
-      } catch (error) {
-        await logger.error('REGISTER_FAILED', { 
-          email: input.email, 
-          error: error instanceof Error ? error.message : 'Unknown error' 
-        }, undefined, context.req?.ip);
-        throw error;
-      }
-    },
+      const tokens = generateTokens(tokenPayload);
+      setTokenCookies(context.res, tokens);
+
+      await logger.info('REGISTER_SUCCESS', { email }, user.id, context.req?.ip);
+
+      return {
+        ...tokens,
+        user: {
+          id: user.id,
+          email: user.email,
+          globalStatus: user.globalStatus
+        }
+      };
+
+    } catch (error) {
+      await logger.error('REGISTER_FAILED', { 
+        email: input.email, 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }, undefined, context.req?.ip);
+      throw error;
+    }
+  },
 
     forgotPassword: async (_: any, { input }: any, context: any) => {
       try {

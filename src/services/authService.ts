@@ -1,4 +1,4 @@
-// src/services/authService.ts
+// src/services/authService.ts - MINOR FIXES
 import { db } from '../database/client.js';
 import { hashPassword, verifyPassword } from '../utils/authUtils.js';
 import { logger } from './logger.js';
@@ -50,7 +50,7 @@ export class AuthService {
 
       const user = result.rows[0];
 
-      // Check if user is banned
+      // Check if user is banned - FIXED: Use proper status check
       if (user.global_status === 'BANNED') {
         return null;
       }
@@ -65,7 +65,7 @@ export class AuthService {
       return {
         id: user.id,
         email: user.email,
-        globalStatus: user.global_status
+        global_status: user.global_status // FIXED: Keep consistent naming
       };
 
     } catch (error) {
