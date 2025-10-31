@@ -22,6 +22,9 @@ COPY . .
 # Create necessary directories
 RUN mkdir -p logs dist
 
+# Set production environment
+ENV NODE_ENV=production
+
 # Build the application
 RUN bun run build
 

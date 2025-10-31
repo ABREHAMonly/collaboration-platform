@@ -1,6 +1,7 @@
 // src/config/env.ts - Enhanced for Cloud with better error handling
 import { config } from 'dotenv';
 import { join } from 'path';
+
 // Add this at the very top
 console.log('🔍 DEBUG - Process environment:', {
   NODE_ENV: process.env.NODE_ENV,
@@ -9,38 +10,34 @@ console.log('🔍 DEBUG - Process environment:', {
   DATABASE_URL: process.env.DATABASE_URL ? '✓ Set' : '✗ Missing',
   JWT_SECRET: process.env.JWT_SECRET ? '✓ Set' : '✗ Missing'
 });
+
 // Check if we're running on Render
 const isRender = process.env.RENDER || process.env.RENDER_EXTERNAL_URL;
 
-// FORCE production on Render
+// FORCE production on Render - this is the key fix
 if (isRender) {
   process.env.NODE_ENV = 'production';
   console.log('🚀 Render environment detected - Forcing production mode');
 }
 
-const originalNodeEnv = process.env.NODE_ENV;
-console.log('🔍 Original NODE_ENV from environment:', originalNodeEnv);
+// Use the potentially updated NODE_ENV
+const nodeEnv = process.env.NODE_ENV || 'development';
+console.log('🔍 Final NODE_ENV:', nodeEnv);
 
-// Load environment files in correct order:
-if (originalNodeEnv === 'production') {
-  // Production: load .env.production first, then .env as fallback
+// Load environment files based on FINAL NODE_ENV
+if (nodeEnv === 'production') {
   config({ path: join(process.cwd(), '.env.production') });
   config({ path: join(process.cwd(), '.env') });
+  console.log('📁 Loaded .env.production and .env files');
 } else {
-  // Development/Test: load .env.development first, then .env as fallback
-  const envFile = originalNodeEnv === 'test' ? '.env.test' : '.env.development';
+  const envFile = nodeEnv === 'test' ? '.env.test' : '.env.development';
   config({ path: join(process.cwd(), envFile) });
   config({ path: join(process.cwd(), '.env') });
+  console.log(`📁 Loaded ${envFile} and .env files for ${nodeEnv}`);
 }
 
-// Now set NODE_ENV properly (use the original or what was set in .env files)
-process.env.NODE_ENV = process.env.NODE_ENV || originalNodeEnv || 'development';
-
-console.log('🔍 Final NODE_ENV:', process.env.NODE_ENV);
-console.log('🔍 Environment files loaded for:', process.env.NODE_ENV);
-
 // Cloud environment variable mapping
-if (process.env.NODE_ENV === 'production') {
+if (nodeEnv === 'production') {
   // Map common cloud provider environment variables
   process.env.DATABASE_URL = process.env.DATABASE_URL 
     || process.env.DATABASE_CONNECTION_STRING 
@@ -67,7 +64,7 @@ const missingVars = requiredVars.filter(varName => {
 if (missingVars.length > 0) {
   console.error('❌ Missing required environment variables:', missingVars);
   
-  if (process.env.NODE_ENV === 'production') {
+  if (nodeEnv === 'production') {
     throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
   } else {
     console.warn('⚠️ Using development fallbacks for missing environment variables');
@@ -90,7 +87,7 @@ export const env = {
   databaseUrl: process.env.DATABASE_URL!,
   jwtSecret: process.env.JWT_SECRET!,
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET!,
-  nodeEnv: process.env.NODE_ENV!,
+  nodeEnv: nodeEnv,
   port: parseInt(process.env.PORT || '4000'),
   
   // Feature flags
@@ -99,12 +96,12 @@ export const env = {
   logLevel: process.env.LOG_LEVEL || 'info',
   
   // Environment detection
-  isProduction: process.env.NODE_ENV === 'production',
-  isDevelopment: process.env.NODE_ENV === 'development' || !process.env.NODE_ENV,
-  isTest: process.env.NODE_ENV === 'test',
+  isProduction: nodeEnv === 'production',
+  isDevelopment: nodeEnv === 'development',
+  isTest: nodeEnv === 'test',
   
   // Enhanced SSL configuration
-  ssl: process.env.NODE_ENV === 'production' ? {
+  ssl: nodeEnv === 'production' ? {
     rejectUnauthorized: false,
     ca: process.env.DB_SSL_CERT
   } : false,
@@ -112,7 +109,7 @@ export const env = {
   // Enhanced CORS for production
   corsOrigins: process.env.CORS_ORIGINS 
     ? process.env.CORS_ORIGINS.split(',') 
-    : (process.env.NODE_ENV === 'production' 
+    : (nodeEnv === 'production' 
         ? [
             'https://collaboration-platform-frontend.vercel.app',
             'https://collaboration-platform.vercel.app',
