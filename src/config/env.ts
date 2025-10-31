@@ -1,28 +1,29 @@
 // src/config/env.ts - Enhanced for Cloud with better error handling
 import { config } from 'dotenv';
 import { join } from 'path';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+// Capture the original NODE_ENV from the environment BEFORE loading any .env files
+const originalNodeEnv = process.env.NODE_ENV;
 
-// Add this at the very top of your env.ts file
-console.log('🔍 DEBUG - Raw NODE_ENV:', process.env.NODE_ENV);
-console.log('🔍 DEBUG - All env vars:', Object.keys(process.env).filter(key => key.includes('NODE')))
+console.log('🔍 Original NODE_ENV from environment:', originalNodeEnv);
 
-// Load environment variables FIRST, before any logic
-config({ path: join(process.cwd(), '.env') });
+// Load environment files in correct order:
+if (originalNodeEnv === 'production') {
+  // Production: load .env.production first, then .env as fallback
+  config({ path: join(process.cwd(), '.env.production') });
+  config({ path: join(process.cwd(), '.env') });
+} else {
+  // Development/Test: load .env.development first, then .env as fallback
+  const envFile = originalNodeEnv === 'test' ? '.env.test' : '.env.development';
+  config({ path: join(process.cwd(), envFile) });
+  config({ path: join(process.cwd(), '.env') });
+}
 
-// Then check NODE_ENV and load specific file
-const envFile = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.development';
-config({ path: join(process.cwd(), envFile) });
+// Now set NODE_ENV properly (use the original or what was set in .env files)
+process.env.NODE_ENV = process.env.NODE_ENV || originalNodeEnv || 'development';
 
-// Fallback to default .env if specific file doesn't exist
-config({ path: join(process.cwd(), '.env') });
-console.log('🔍 Current NODE_ENV:', process.env.NODE_ENV);
-console.log('🔍 Loaded environment files in order: .env, then', envFile);
-
+console.log('🔍 Final NODE_ENV:', process.env.NODE_ENV);
+console.log('🔍 Environment files loaded for:', process.env.NODE_ENV);
 
 // Cloud environment variable mapping
 if (process.env.NODE_ENV === 'production') {
@@ -30,8 +31,7 @@ if (process.env.NODE_ENV === 'production') {
   process.env.DATABASE_URL = process.env.DATABASE_URL 
     || process.env.DATABASE_CONNECTION_STRING 
     || process.env.POSTGRES_URL 
-    || process.env.NEON_DATABASE_URL
-    || process.env.DATABASE_URL;
+    || process.env.NEON_DATABASE_URL;
 
   // Ensure SSL in production
   process.env.DB_SSL = 'true';
@@ -53,7 +53,6 @@ const missingVars = requiredVars.filter(varName => {
 if (missingVars.length > 0) {
   console.error('❌ Missing required environment variables:', missingVars);
   
-  // In production, throw error; in development, use fallbacks
   if (process.env.NODE_ENV === 'production') {
     throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
   } else {
@@ -77,7 +76,7 @@ export const env = {
   databaseUrl: process.env.DATABASE_URL!,
   jwtSecret: process.env.JWT_SECRET!,
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET!,
-  nodeEnv: process.env.NODE_ENV || 'development',
+  nodeEnv: process.env.NODE_ENV!,
   port: parseInt(process.env.PORT || '4000'),
   
   // Feature flags
@@ -90,13 +89,13 @@ export const env = {
   isDevelopment: process.env.NODE_ENV === 'development' || !process.env.NODE_ENV,
   isTest: process.env.NODE_ENV === 'test',
   
-// Enhanced SSL configuration
+  // Enhanced SSL configuration
   ssl: process.env.NODE_ENV === 'production' ? {
     rejectUnauthorized: false,
     ca: process.env.DB_SSL_CERT
   } : false,
 
-// Enhanced CORS for production
+  // Enhanced CORS for production
   corsOrigins: process.env.CORS_ORIGINS 
     ? process.env.CORS_ORIGINS.split(',') 
     : (process.env.NODE_ENV === 'production' 
@@ -107,10 +106,9 @@ export const env = {
           ] 
         : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:4000']),
 
-        // JWT Expiry
+  // JWT Expiry
   jwtAccessExpiry: process.env.JWT_ACCESS_EXPIRY || '15m',
   jwtRefreshExpiry: process.env.JWT_REFRESH_EXPIRY || '7d'
-  
 } as const;
 
 // Log environment info (without secrets)
