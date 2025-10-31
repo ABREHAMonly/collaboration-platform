@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "bun --watch src/server.ts",
     "build": "bun build src/server.ts --outdir dist --target node",
-    "start": "bun dist/server.js",
+    "start": "NODE_ENV=production bun dist/server.js",
     "render:build": "bun run build:clean && tsc",
     "test": "bun test",
     "hotfix": "bun scripts/hotfix.js",

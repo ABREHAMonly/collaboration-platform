@@ -1,10 +1,24 @@
 // src/config/env.ts - Enhanced for Cloud with better error handling
 import { config } from 'dotenv';
 import { join } from 'path';
+// Add this at the very top
+console.log('🔍 DEBUG - Process environment:', {
+  NODE_ENV: process.env.NODE_ENV,
+  RENDER: process.env.RENDER,
+  RENDER_EXTERNAL_URL: process.env.RENDER_EXTERNAL_URL,
+  DATABASE_URL: process.env.DATABASE_URL ? '✓ Set' : '✗ Missing',
+  JWT_SECRET: process.env.JWT_SECRET ? '✓ Set' : '✗ Missing'
+});
+// Check if we're running on Render
+const isRender = process.env.RENDER || process.env.RENDER_EXTERNAL_URL;
 
-// Capture the original NODE_ENV from the environment BEFORE loading any .env files
+// FORCE production on Render
+if (isRender) {
+  process.env.NODE_ENV = 'production';
+  console.log('🚀 Render environment detected - Forcing production mode');
+}
+
 const originalNodeEnv = process.env.NODE_ENV;
-
 console.log('🔍 Original NODE_ENV from environment:', originalNodeEnv);
 
 // Load environment files in correct order:
