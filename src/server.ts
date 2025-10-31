@@ -17,7 +17,7 @@ import { resolvers } from './graphql/resolvers.js';
 import authRoutes from './rest/auth.js';
 import healthRoutes from './rest/health.js';
 import docsRoutes from './rest/docs.js';
-import { authenticateToken } from './middleware/auth.js';
+import { authenticateToken, optionalAuth } from './middleware/auth.js';
 import { securityHeaders, requestLogger } from './middleware/security.js';
 import { logger } from './services/logger.js';
 import { createWebSocketServer } from './graphql/subscription.js';
@@ -216,22 +216,22 @@ async function startServer() {
     await apolloServer.start();
     logger.info('✅ Apollo Server started');
 
-    // GraphQL endpoint (authenticated)
-    app.use('/graphql', 
-      authenticateToken,
-      expressMiddleware(apolloServer, {
-        context: async ({ req, res }) => {
-          return {
-            user: (req as any).user,
-            req,
-            res,
-            db,
-            logger,
-            env
-          };
-        }
-      })
-    );
+    // GraphQL endpoint (with optional authentication)
+app.use('/graphql', 
+  optionalAuth, // Use optionalAuth instead of authenticateToken
+  expressMiddleware(apolloServer, {
+    context: async ({ req, res }) => {
+      return {
+        user: req.user, // This will be null for public operations
+        req,
+        res,
+        db,
+        logger,
+        env
+      };
+    }
+  })
+);
     app.use('/api/diagnostics', diagnosticsRoutes);
 
     // Global error handler

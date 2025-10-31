@@ -1,4 +1,4 @@
-// src/middleware/auth.ts - Fixed TypeScript errors
+// src/middleware/auth.ts - FIXED for public GraphQL operations
 import { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, TokenPayload } from '../utils/authUtils.js';
 import { AuthService } from '../services/authService.js';
@@ -16,6 +16,31 @@ declare global {
 
 export const authenticateToken = async (req: Request, res: Response, next: NextFunction) => {
   try {
+    // Skip authentication for specific GraphQL operations
+    if (req.path === '/graphql' && req.body) {
+      const { operationName, query } = req.body;
+      
+      // Allow login and register mutations without authentication
+      if (operationName === 'Login' || operationName === 'Register' || 
+          (query && (
+            query.includes('mutation Login') || 
+            query.includes('mutation Register') ||
+            query.includes('__schema') || // Introspection queries
+            query.includes('IntrospectionQuery')
+          ))) {
+        logger.debug('Skipping authentication for public GraphQL operation', { 
+          operationName, 
+          path: req.path 
+        });
+        return next();
+      }
+    }
+
+    // Skip authentication for REST auth endpoints
+    if (req.path.startsWith('/api/auth/login') || req.path.startsWith('/api/auth/register')) {
+      return next();
+    }
+
     let token: string | undefined;
 
     // Check cookies first
@@ -137,22 +162,6 @@ export const requireRole = (allowedRoles: string[]) => {
 
 // Admin-only middleware
 export const requireAdmin = requireRole(['ADMIN']);
-
-// Workspace authorization middleware (placeholder for now)
-export const requireWorkspaceAccess = (minimumRole: string = 'VIEWER') => {
-  return async (req: Request, res: Response, next: NextFunction) => {
-    // This will be implemented in the workspace service
-    // For now, just pass through if authenticated
-    if (!req.user) {
-      res.status(401).json({
-        success: false,
-        message: 'Authentication required'
-      });
-      return;
-    }
-    next();
-  };
-};
 
 // Optional authentication middleware (attaches user if available)
 export const optionalAuth = async (req: Request, res: Response, next: NextFunction) => {
