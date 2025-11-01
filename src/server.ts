@@ -205,12 +205,80 @@ const apolloServer = new ApolloServer({
 // Create WebSocket server for subscriptions
 const serverCleanup = createWebSocketServer(httpServer);
 
+
+
+async function runStartupMigrations() {
+  try {
+    console.log('🚀 Running startup database optimizations...');
+    
+    // Critical performance indexes
+    const migrationQueries = [
+      // 1. Workspace/Project role indexes
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_workspace_members_user_role 
+       ON workspace_members(user_id, role) 
+       WHERE role IN ('OWNER', 'MEMBER')`,
+
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_project_members_user_role 
+       ON project_members(user_id, role) 
+       WHERE role IN ('PROJECT_LEAD', 'CONTRIBUTOR')`,
+
+      // 2. Task indexes
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_tasks_created_by_status 
+       ON tasks(created_by, status)`,
+
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_tasks_due_date_status 
+       ON tasks(due_date, status) 
+       WHERE due_date IS NOT NULL`,
+
+      // 3. Notification index
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_notifications_user_created 
+       ON notifications(recipient_id, created_at DESC) 
+       WHERE status = 'DELIVERED'`,
+
+      // 4. Audit log index
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audit_logs_timestamp_level 
+       ON audit_logs(timestamp DESC, level)`,
+
+      // 5. User index
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_created_at 
+       ON users(created_at DESC) 
+       WHERE global_status = 'ACTIVE'`
+    ];
+
+    let successCount = 0;
+    
+    for (let i = 0; i < migrationQueries.length; i++) {
+      try {
+        await db.query(migrationQueries[i]);
+        successCount++;
+        console.log(`✅ Created index ${i + 1}/${migrationQueries.length}`);
+      } catch (error) {
+        // If index already exists, just continue
+        if (error instanceof Error && error.message.includes('already exists')) {
+          console.log(`ℹ️  Index ${i + 1} already exists`);
+          successCount++;
+        } else {
+          console.log(`⚠️  Could not create index ${i + 1}:`, error instanceof Error ? error.message : 'Unknown error');
+        }
+      }
+    }
+
+    console.log(`🎉 Startup migrations completed: ${successCount}/${migrationQueries.length} successful`);
+    
+  } catch (error) {
+    console.log('⚠️  Startup migrations encountered issues, but server will continue:', error);
+    // Don't throw error - server should start even if migrations fail
+  }
+}
+
 // Initialize server
 async function startServer() {
   try {
     // Connect to database first
     await db.connect();
     logger.info('✅ Database connected successfully');
+    // Run migrations automatically
+    await runStartupMigrations();
 
     // Start Apollo Server
     await apolloServer.start();
