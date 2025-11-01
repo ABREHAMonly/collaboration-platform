@@ -1,4 +1,4 @@
-// src/services/aiService.ts - FIXED without listModels
+// src/services/aiService.ts - UPDATED with correct Gemini 2.5 models
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { env } from '../config/env.js';
 import { db } from '../database/client.js';
@@ -21,6 +21,7 @@ export class AIService {
   private static genAI: GoogleGenerativeAI | null = null;
   private static model: any = null;
   private static isAvailable = false;
+  private static currentModel: string | null = null;
 
   static async initialize() {
     if (!env.geminiApiKey) {
@@ -32,11 +33,15 @@ export class AIService {
       console.log('🔧 Initializing Gemini AI service...');
       this.genAI = new GoogleGenerativeAI(env.geminiApiKey);
       
-      // Try different model names in order (remove listModels)
+      // Try the LATEST model names from Google AI Studio
       const modelsToTry = [
-        'gemini-1.5-flash',
-        'gemini-1.5-pro', 
-        'gemini-pro'
+        'gemini-2.5-flash',           // Primary - latest flash model
+        'gemini-2.5-pro',             // Primary - latest pro model  
+        'gemini-flash-latest',        // Latest flash
+        'gemini-2.5-flash-lite',      // Lite version
+        'gemini-1.5-flash',           // Fallback to 1.5
+        'gemini-1.5-pro',             // Fallback to 1.5 pro
+        'gemini-pro'                  // Legacy fallback
       ];
 
       let foundWorkingModel = false;
@@ -53,6 +58,7 @@ export class AIService {
           console.log(`✅ Successfully initialized with model: ${modelName}`);
           this.isAvailable = true;
           foundWorkingModel = true;
+          this.currentModel = modelName;
           break;
         } catch (modelError: any) {
           console.log(`❌ Model ${modelName} failed:`, modelError.message?.substring(0, 100));
@@ -64,21 +70,14 @@ export class AIService {
         console.error('❌ No working Gemini model found. AI features disabled.');
         this.model = null;
         this.isAvailable = false;
-        
-        // Try one more time with the original model as fallback
-        try {
-          this.model = this.genAI.getGenerativeModel({ model: "gemini-pro" });
-          console.log('✅ Fallback to gemini-pro completed');
-          this.isAvailable = true;
-        } catch (finalError) {
-          console.error('❌ Final fallback also failed');
-        }
+        this.currentModel = null;
       }
 
     } catch (error: any) {
       console.error('❌ Failed to initialize Gemini AI:', error.message);
       this.model = null;
       this.isAvailable = false;
+      this.currentModel = null;
     }
   }
 
@@ -89,6 +88,8 @@ export class AIService {
 
     try {
       const prompt = `Please provide a concise 1-2 sentence summary of: "${taskDescription}"`;
+      console.log(`🤖 Using ${this.currentModel} for summarization`);
+      
       const result = await this.model.generateContent(prompt);
       const response = await result.response;
       return response.text().trim();
@@ -119,18 +120,32 @@ export class AIService {
     }
 
     try {
+      console.log(`🤖 Using ${this.currentModel} for task generation`);
+      
       const aiPrompt = `
-        Based on: "${prompt}"
-        Generate 3-5 specific tasks as JSON array with "title" and "description".
-        Return ONLY valid JSON in format: [{"title": "...", "description": "..."}]
+        Based on this project goal: "${prompt}"
+        
+        Please generate 3-5 specific, actionable tasks as a JSON array.
+        Each task should have a clear title and description.
+        
+        Return ONLY valid JSON in this exact format:
+        [
+          {
+            "title": "Specific task title",
+            "description": "Clear description of what needs to be done"
+          }
+        ]
+        
+        Make the tasks practical and achievable.
       `;
 
       const result = await this.model.generateContent(aiPrompt);
       const response = await result.response;
       const text = response.text().trim();
 
-      // Clean the response
+      // Clean the response - remove markdown code blocks if present
       const cleanText = text.replace(/```json\n?|\n?```/g, '').trim();
+      console.log(`🤖 AI raw response: ${cleanText.substring(0, 200)}...`);
 
       let tasksData: AITaskData[];
       try {
@@ -142,7 +157,7 @@ export class AIService {
       }
 
       if (!Array.isArray(tasksData)) {
-        throw new Error('AI response format error');
+        throw new Error('AI response format error - expected array of tasks');
       }
 
       // Create tasks in database
@@ -175,7 +190,7 @@ export class AIService {
       }
 
       await logger.info('AI_TASKS_GENERATED', 
-        { projectId, prompt, tasksGenerated: createdTasks.length }, 
+        { projectId, prompt, tasksGenerated: createdTasks.length, model: this.currentModel }, 
         userId, 
         ipAddress
       );
@@ -266,7 +281,7 @@ export class AIService {
   static getStatus(): { isAvailable: boolean; model: string | null } {
     return {
       isAvailable: this.isAvailable,
-      model: this.model ? 'active' : null
+      model: this.currentModel
     };
   }
 }
