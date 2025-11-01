@@ -14,6 +14,7 @@ import { AuthService } from '@/services/authService.js';
 const pubsub = new PubSub();
 
 interface GraphQLContext {
+  [x: string]: any;
   user: {
     id: string;
     email: string;
@@ -647,24 +648,24 @@ myWorkspaces: async (_: any, __: any, context: any) => {
     // AI mutations
     generateTasksFromPrompt: async (
       _: unknown, 
-      { input }: { input: { prompt: string; projectId: string } }, // FIXED: Added proper types
-      context: GraphQLContext // FIXED: Added proper type
+      { input }: { input: { prompt: string; projectId: string } },
+      context: GraphQLContext
     ) => {
-      try {
-        if (!context.user) {
-          throw new Error('Authentication required');
-        }
+      // Check if user is authenticated
+      if (!context.user) {
+        throw new Error('Authentication required');
+      }
 
+      try {
         const tasks = await AIService.generateTasksFromPrompt(
           input, 
           context.user.id, 
-          context.ipAddress,
+          context.req.ip, // Get IP from request
           context.pubsub
         );
         
         return tasks;
-      } catch (error: unknown) { // FIXED: Proper error typing
-        console.error('GraphQL - generateTasksFromPrompt error:', error);
+      } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
         throw new Error(`Failed to generate tasks: ${errorMessage}`);
       }

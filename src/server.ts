@@ -1,4 +1,4 @@
-// src/server.ts - Fixed for Apollo Server 4
+// src/server.ts - FIXED Apollo Server Context
 import express from 'express';
 import { createServer } from 'http';
 import { ApolloServer } from '@apollo/server';
@@ -22,6 +22,19 @@ import { securityHeaders, requestLogger } from './middleware/security.js';
 import { logger } from './services/logger.js';
 import { createWebSocketServer } from './graphql/subscription.js';
 import diagnosticsRoutes from './rest/diagnostics.js';
+
+// Define the proper GraphQL context interface
+interface GraphQLContext {
+  user?: {
+    id: string;
+    email: string;
+  };
+  req: express.Request;
+  res: express.Response;
+  db: any;
+  logger: any;
+  env: any;
+}
 
 // Custom XSS sanitizer
 const xssSanitizer = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -160,18 +173,8 @@ app.use(morgan('combined', {
 }));
 app.use(requestLogger);
 
-
 // Health checks (no authentication required)
 app.use('/api/health', healthRoutes);
-
-app.get('/api/test', (req, res) => {
-  res.json({
-    success: true,
-    message: 'Backend is working!',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV
-  });
-});
 
 // API Documentation
 app.use('/api/docs', docsRoutes);
@@ -179,8 +182,8 @@ app.use('/api/docs', docsRoutes);
 // REST routes
 app.use('/api/auth', authRoutes);
 
-// GraphQL setup - FIXED: Pass typeDefs and resolvers directly
-const apolloServer = new ApolloServer({
+// GraphQL setup - FIXED: Add proper context type to ApolloServer
+const apolloServer = new ApolloServer<GraphQLContext>({
   typeDefs,
   resolvers,
   introspection: env.isDevelopment,
@@ -189,10 +192,10 @@ const apolloServer = new ApolloServer({
       async requestDidStart() {
         return {
           async didResolveOperation(requestContext) {
-            const user = (requestContext.contextValue as any)?.user;
+            const user = requestContext.contextValue?.user;
             logger.info('GraphQL Request', {
               operationName: requestContext.request.operationName,
-              user: user?.userId,
+              user: user?.id,
               environment: env.nodeEnv
             });
           },
@@ -204,8 +207,6 @@ const apolloServer = new ApolloServer({
 
 // Create WebSocket server for subscriptions
 const serverCleanup = createWebSocketServer(httpServer);
-
-
 
 async function runStartupMigrations() {
   try {
@@ -284,22 +285,28 @@ async function startServer() {
     await apolloServer.start();
     logger.info('✅ Apollo Server started');
 
-    // GraphQL endpoint (with optional authentication)
-app.use('/graphql', 
-  optionalAuth, // Use optionalAuth instead of authenticateToken
-  expressMiddleware(apolloServer, {
-    context: async ({ req, res }) => {
-      return {
-        user: req.user, // This will be null for public operations
-        req,
-        res,
-        db,
-        logger,
-        env
-      };
-    }
-  })
-);
+    // GraphQL endpoint (with optional authentication) - FIXED: Proper context typing
+    app.use('/graphql', 
+      optionalAuth,
+      expressMiddleware(apolloServer, {
+        context: async ({ req, res }): Promise<GraphQLContext> => {
+          // Type-safe context creation
+          const context: GraphQLContext = {
+            user: req.user ? { 
+              id: req.user.id, 
+              email: req.user.email 
+            } : undefined,
+            req,
+            res,
+            db,
+            logger,
+            env
+          };
+          return context;
+        }
+      })
+    );
+
     app.use('/api/diagnostics', diagnosticsRoutes);
 
     // Global error handler
@@ -339,9 +346,6 @@ app.use('/graphql',
         }
       });
     });
-
-
-
 
     // Start server
     const PORT = env.port;

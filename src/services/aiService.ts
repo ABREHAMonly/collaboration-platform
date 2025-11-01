@@ -1,4 +1,4 @@
-// src/services/aiService.ts - FIXED with proper types
+// src/services/aiService.ts - FIXED without listModels
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { env } from '../config/env.js';
 import { db } from '../database/client.js';
@@ -17,63 +17,89 @@ interface AITaskData {
   description: string;
 }
 
-interface GraphQLContext {
-  user: {
-    id: string;
-  };
-  ipAddress?: string;
-  pubsub?: PubSub;
-}
-
 export class AIService {
   private static genAI: GoogleGenerativeAI | null = null;
   private static model: any = null;
+  private static isAvailable = false;
 
-  static initialize() {
+  static async initialize() {
     if (!env.geminiApiKey) {
       console.warn('⚠️ Gemini API key not configured - AI features disabled');
       return;
     }
 
     try {
+      console.log('🔧 Initializing Gemini AI service...');
       this.genAI = new GoogleGenerativeAI(env.geminiApiKey);
-      // Use the correct FREE tier model name - FIXED getGenerativeAI typo
-      this.model = this.genAI.getGenerativeModel({ model: "gemini-pro" });
-      console.log('✅ Gemini AI service initialized with gemini-pro (free tier)');
-    } catch (error) {
-      console.error('❌ Failed to initialize Gemini AI:', error);
+      
+      // Try different model names in order (remove listModels)
+      const modelsToTry = [
+        'gemini-1.5-flash',
+        'gemini-1.5-pro', 
+        'gemini-pro'
+      ];
+
+      let foundWorkingModel = false;
+
+      for (const modelName of modelsToTry) {
+        try {
+          console.log(`🔄 Trying model: ${modelName}`);
+          this.model = this.genAI.getGenerativeModel({ model: modelName });
+          
+          // Simple test to see if model works
+          const testResult = await this.model.generateContent('Say "Hello" in one word');
+          await testResult.response;
+          
+          console.log(`✅ Successfully initialized with model: ${modelName}`);
+          this.isAvailable = true;
+          foundWorkingModel = true;
+          break;
+        } catch (modelError: any) {
+          console.log(`❌ Model ${modelName} failed:`, modelError.message?.substring(0, 100));
+          continue;
+        }
+      }
+
+      if (!foundWorkingModel) {
+        console.error('❌ No working Gemini model found. AI features disabled.');
+        this.model = null;
+        this.isAvailable = false;
+        
+        // Try one more time with the original model as fallback
+        try {
+          this.model = this.genAI.getGenerativeModel({ model: "gemini-pro" });
+          console.log('✅ Fallback to gemini-pro completed');
+          this.isAvailable = true;
+        } catch (finalError) {
+          console.error('❌ Final fallback also failed');
+        }
+      }
+
+    } catch (error: any) {
+      console.error('❌ Failed to initialize Gemini AI:', error.message);
+      this.model = null;
+      this.isAvailable = false;
     }
   }
 
   static async summarizeTask(taskDescription: string): Promise<string> {
-    if (!this.model) {
-      // Return a simple fallback summary if AI is not available
-      return `Summary: ${taskDescription.substring(0, 150)}${taskDescription.length > 150 ? '...' : ''}`;
+    if (!this.isAvailable || !this.model) {
+      return `Summary: ${taskDescription.substring(0, 150)}${taskDescription.length > 150 ? '...' : ''} [AI unavailable]`;
     }
 
     try {
-      const prompt = `
-        Please provide a concise 1-2 sentence summary of the following task description.
-        Focus on the key objectives and deliverables.
-        
-        Task Description: "${taskDescription}"
-        
-        Summary:
-      `;
-
+      const prompt = `Please provide a concise 1-2 sentence summary of: "${taskDescription}"`;
       const result = await this.model.generateContent(prompt);
       const response = await result.response;
       return response.text().trim();
-
     } catch (error: any) {
-      console.error('AIService - summarizeTask error:', error);
-      // Return a simple fallback instead of throwing
+      console.error('AIService - summarizeTask error:', error.message);
       return `Summary: ${taskDescription.substring(0, 150)}${taskDescription.length > 150 ? '...' : ''} [AI temporarily unavailable]`;
     }
   }
 
   static async generateTasksFromPrompt(
-    input: AIGenerateTasksInput, // FIXED: Added proper type
+    input: AIGenerateTasksInput,
     userId: string, 
     ipAddress?: string, 
     pubsub?: PubSub
@@ -86,54 +112,42 @@ export class AIService {
       throw new Error('Insufficient permissions to create tasks in this project');
     }
 
-    // If AI service is not available, return mock tasks
-    if (!this.model) {
-      console.log('AI service not available, returning mock tasks');
+    // If AI service is not available, return mock tasks immediately
+    if (!this.isAvailable || !this.model) {
+      console.log('🤖 AI service not available, using mock tasks');
       return await this.createMockTasks(prompt, projectId, userId, ipAddress, pubsub);
     }
 
     try {
       const aiPrompt = `
-        Based on the following project prompt, generate a structured list of specific, actionable tasks.
-        Return the tasks as a JSON array of objects with "title" and "description" fields.
-        Each task should be clear, measurable, and achievable.
-        
-        Project Prompt: "${prompt}"
-        
-        Return ONLY valid JSON in this exact format:
-        [
-          {
-            "title": "Task title here",
-            "description": "Task description here"
-          }
-        ]
-        
-        Generate 3-5 tasks depending on the complexity of the prompt.
+        Based on: "${prompt}"
+        Generate 3-5 specific tasks as JSON array with "title" and "description".
+        Return ONLY valid JSON in format: [{"title": "...", "description": "..."}]
       `;
 
       const result = await this.model.generateContent(aiPrompt);
       const response = await result.response;
       const text = response.text().trim();
 
-      // Clean the response - remove markdown code blocks if present
+      // Clean the response
       const cleanText = text.replace(/```json\n?|\n?```/g, '').trim();
 
       let tasksData: AITaskData[];
       try {
         tasksData = JSON.parse(cleanText);
+        console.log(`✅ AI generated ${tasksData.length} tasks`);
       } catch (parseError) {
-        console.error('Failed to parse AI response:', cleanText);
-        // Fallback to mock tasks if parsing fails
+        console.error('Failed to parse AI response, using mock tasks');
         return await this.createMockTasks(prompt, projectId, userId, ipAddress, pubsub);
       }
 
       if (!Array.isArray(tasksData)) {
-        throw new Error('AI response format error - expected array of tasks');
+        throw new Error('AI response format error');
       }
 
       // Create tasks in database
       const createdTasks = [];
-      for (const taskData of tasksData.slice(0, 5)) { // Limit to 5 tasks max
+      for (const taskData of tasksData.slice(0, 5)) {
         if (taskData.title && taskData.description) {
           try {
             const task = await TaskService.createTask(
@@ -148,19 +162,14 @@ export class AIService {
               pubsub
             );
             
-            // Return proper structure for GraphQL
             createdTasks.push({
               id: task.id,
               title: task.title,
               description: task.description,
-              status: task.status,
-              project: { id: projectId },
-              createdBy: { id: userId },
-              assignedTo: []
+              status: task.status
             });
           } catch (taskError) {
             console.error('Failed to create AI-generated task:', taskError);
-            // Continue with other tasks
           }
         }
       }
@@ -173,11 +182,9 @@ export class AIService {
 
       return createdTasks;
 
-    } catch (error) {
-      console.error('AIService - generateTasksFromPrompt error:', error);
-      
-      // Fallback to mock tasks on AI service failure
-      console.log('AI service failed, falling back to mock tasks');
+    } catch (error: any) {
+      console.error('AIService - generateTasksFromPrompt error:', error.message);
+      console.log('🤖 AI service failed, falling back to mock tasks');
       return await this.createMockTasks(prompt, projectId, userId, ipAddress, pubsub);
     }
   }
@@ -197,7 +204,7 @@ export class AIService {
           description: "Document all requirements and define the project scope clearly."
         },
         {
-          title: "Create project timeline and milestones",
+          title: "Create project timeline and milestones", 
           description: "Develop a detailed timeline with key milestones and deadlines."
         },
         {
@@ -229,15 +236,11 @@ export class AIService {
             pubsub
           );
           
-          // Return proper structure for GraphQL
           createdTasks.push({
             id: task.id,
             title: task.title,
             description: task.description,
-            status: task.status,
-            project: { id: projectId },
-            createdBy: { id: userId },
-            assignedTo: []
+            status: task.status
           });
         } catch (taskError) {
           console.error('Failed to create mock task:', taskError);
@@ -250,6 +253,7 @@ export class AIService {
         ipAddress
       );
 
+      console.log(`🤖 Created ${createdTasks.length} mock tasks for project ${projectId}`);
       return createdTasks;
 
     } catch (error) {
@@ -258,37 +262,14 @@ export class AIService {
     }
   }
 
-  static async estimateTaskComplexity(taskDescription: string): Promise<string> {
-    if (!this.model) {
-      return 'MEDIUM'; // Default fallback
-    }
-
-    try {
-      const prompt = `
-        Analyze the following task and estimate its complexity level.
-        Return ONLY one of these three options: LOW, MEDIUM, or HIGH.
-        
-        Task: "${taskDescription}"
-        
-        Complexity:
-      `;
-
-      const result = await this.model.generateContent(prompt);
-      const response = await result.response;
-      const complexity = response.text().trim().toUpperCase();
-
-      if (['LOW', 'MEDIUM', 'HIGH'].includes(complexity)) {
-        return complexity;
-      } else {
-        return 'MEDIUM'; // Default fallback
-      }
-
-    } catch (error) {
-      console.error('AIService - estimateTaskComplexity error:', error);
-      return 'MEDIUM'; // Default fallback on error
-    }
+  // Get AI service status
+  static getStatus(): { isAvailable: boolean; model: string | null } {
+    return {
+      isAvailable: this.isAvailable,
+      model: this.model ? 'active' : null
+    };
   }
 }
 
-// Initialize AI service on import
-AIService.initialize();
+// Initialize AI service
+AIService.initialize().catch(console.error);
