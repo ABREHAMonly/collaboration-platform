@@ -1,5 +1,4 @@
-// src/services/aiService.ts - Fixed for Apollo Server 4
-// src/services/aiService.ts - FIXED for free tier Gemini
+// src/services/aiService.ts - FIXED with proper types
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { env } from '../config/env.js';
 import { db } from '../database/client.js';
@@ -7,6 +6,24 @@ import { logger } from './logger.js';
 import { TaskService } from './taskService.js';
 import { ProjectService } from './projectService.js';
 import { PubSub } from 'graphql-subscriptions';
+
+interface AIGenerateTasksInput {
+  prompt: string;
+  projectId: string;
+}
+
+interface AITaskData {
+  title: string;
+  description: string;
+}
+
+interface GraphQLContext {
+  user: {
+    id: string;
+  };
+  ipAddress?: string;
+  pubsub?: PubSub;
+}
 
 export class AIService {
   private static genAI: GoogleGenerativeAI | null = null;
@@ -20,7 +37,7 @@ export class AIService {
 
     try {
       this.genAI = new GoogleGenerativeAI(env.geminiApiKey);
-      // Use the correct FREE tier model name
+      // Use the correct FREE tier model name - FIXED getGenerativeAI typo
       this.model = this.genAI.getGenerativeModel({ model: "gemini-pro" });
       console.log('✅ Gemini AI service initialized with gemini-pro (free tier)');
     } catch (error) {
@@ -56,7 +73,7 @@ export class AIService {
   }
 
   static async generateTasksFromPrompt(
-    input: any, 
+    input: AIGenerateTasksInput, // FIXED: Added proper type
     userId: string, 
     ipAddress?: string, 
     pubsub?: PubSub
@@ -101,7 +118,7 @@ export class AIService {
       // Clean the response - remove markdown code blocks if present
       const cleanText = text.replace(/```json\n?|\n?```/g, '').trim();
 
-      let tasksData;
+      let tasksData: AITaskData[];
       try {
         tasksData = JSON.parse(cleanText);
       } catch (parseError) {
@@ -130,7 +147,17 @@ export class AIService {
               ipAddress,
               pubsub
             );
-            createdTasks.push(task);
+            
+            // Return proper structure for GraphQL
+            createdTasks.push({
+              id: task.id,
+              title: task.title,
+              description: task.description,
+              status: task.status,
+              project: { id: projectId },
+              createdBy: { id: userId },
+              assignedTo: []
+            });
           } catch (taskError) {
             console.error('Failed to create AI-generated task:', taskError);
             // Continue with other tasks
@@ -201,7 +228,17 @@ export class AIService {
             ipAddress,
             pubsub
           );
-          createdTasks.push(task);
+          
+          // Return proper structure for GraphQL
+          createdTasks.push({
+            id: task.id,
+            title: task.title,
+            description: task.description,
+            status: task.status,
+            project: { id: projectId },
+            createdBy: { id: userId },
+            assignedTo: []
+          });
         } catch (taskError) {
           console.error('Failed to create mock task:', taskError);
         }

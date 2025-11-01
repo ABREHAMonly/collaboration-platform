@@ -13,6 +13,14 @@ import { AuthService } from '@/services/authService.js';
 
 const pubsub = new PubSub();
 
+interface GraphQLContext {
+  user: {
+    id: string;
+    email: string;
+  };
+  ipAddress?: string;
+  pubsub?: any;
+}
 // Custom error classes for Apollo Server 4
 class AuthenticationError extends GraphQLError {
   constructor(message: string) {
@@ -637,9 +645,29 @@ myWorkspaces: async (_: any, __: any, context: any) => {
     },
 
     // AI mutations
-    generateTasksFromPrompt: async (_: any, { input }: any, context: any) => {
-      if (!context.user) throw new AuthenticationError('Authentication required');
-      return AIService.generateTasksFromPrompt(input, context.user.userId, context.req?.ip, pubsub);
+    generateTasksFromPrompt: async (
+      _: unknown, 
+      { input }: { input: { prompt: string; projectId: string } }, // FIXED: Added proper types
+      context: GraphQLContext // FIXED: Added proper type
+    ) => {
+      try {
+        if (!context.user) {
+          throw new Error('Authentication required');
+        }
+
+        const tasks = await AIService.generateTasksFromPrompt(
+          input, 
+          context.user.id, 
+          context.ipAddress,
+          context.pubsub
+        );
+        
+        return tasks;
+      } catch (error: unknown) { // FIXED: Proper error typing
+        console.error('GraphQL - generateTasksFromPrompt error:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+        throw new Error(`Failed to generate tasks: ${errorMessage}`);
+      }
     }
   },
 
